@@ -1332,50 +1332,50 @@ mod tests {
 
         let a = (0..m * k).into_iter().map(gen).collect::<Vec<_>>();
         let b = (0..k * n).into_iter().map(gen).collect::<Vec<_>>();
-        let c = (0..m * n)
-            .into_iter()
-            .map(|_| c64::new(0.0, 0.0))
-            .collect::<Vec<_>>();
-        let mut dst = c.clone();
+        let c = (0..m * n).into_iter().map(gen).collect::<Vec<_>>();
 
-        let plan = Plan::new_colmajor_lhs_and_dst_c64(m, n, k);
-        let beta = c64::new(2.5, 0.0);
+        for alpha in [c64::new(0.0, 0.0), c64::new(1.0, 0.0), c64::new(2.7, 3.7)] {
+            let mut dst = c.clone();
 
-        unsafe {
-            plan.execute_unchecked(
-                m,
-                n,
-                k,
-                dst.as_mut_ptr(),
-                1,
-                m as isize,
-                a.as_ptr(),
-                1,
-                m as isize,
-                b.as_ptr(),
-                1,
-                k as isize,
-                c64::new(1.0, 0.0),
-                beta,
-                false,
-                false,
-            );
-        };
+            let plan = Plan::new_colmajor_lhs_and_dst_c64(m, n, k);
+            let beta = c64::new(2.5, 0.0);
 
-        let mut expected_dst = c;
-        for i in 0..m {
-            for j in 0..n {
-                let mut acc = c64::new(0.0, 0.0);
-                for depth in 0..k {
-                    acc += a[depth * m + i] * b[j * k + depth];
+            unsafe {
+                plan.execute_unchecked(
+                    m,
+                    n,
+                    k,
+                    dst.as_mut_ptr(),
+                    1,
+                    m as isize,
+                    a.as_ptr(),
+                    1,
+                    m as isize,
+                    b.as_ptr(),
+                    1,
+                    k as isize,
+                    alpha,
+                    beta,
+                    false,
+                    false,
+                );
+            };
+
+            let mut expected_dst = c.clone();
+            for i in 0..m {
+                for j in 0..n {
+                    let mut acc = c64::new(0.0, 0.0);
+                    for depth in 0..k {
+                        acc += a[depth * m + i] * b[j * k + depth];
+                    }
+                    expected_dst[j * m + i] = alpha * expected_dst[j * m + i] + beta * acc;
                 }
-                expected_dst[j * m + i] += beta * acc;
             }
-        }
 
-        for (&dst, &expected_dst) in core::iter::zip(dst.iter(), expected_dst.iter()) {
-            assert!((dst.re - expected_dst.re).abs() < 1e-5);
-            assert!((dst.im - expected_dst.im).abs() < 1e-5);
+            for (&dst, &expected_dst) in core::iter::zip(dst.iter(), expected_dst.iter()) {
+                assert!((dst.re - expected_dst.re).abs() < 1e-5);
+                assert!((dst.im - expected_dst.im).abs() < 1e-5);
+            }
         }
     }
 

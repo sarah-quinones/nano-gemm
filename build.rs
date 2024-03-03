@@ -457,6 +457,143 @@ impl Display for CplxKernel {
         }
         write!(f, "}}")?;
 
+        write!(
+            f,
+            "else if alpha == (num_complex::Complex {{ re: 0.0, im: 0.0 }}) {{"
+        )?;
+        write!(f, "let beta_re = {}(beta.re);\n", self.set1)?;
+        write!(f, "let beta_im = {}(beta.im);\n", self.set1)?;
+        for j in 0..self.nr {
+            for i in 0..self.mr_div_n {
+                write!(f, "{{")?;
+                write!(
+                    f,
+                    "let dst = dst.offset({i} * N + {j} * dst_cs) as *mut {};",
+                    self.ty,
+                )?;
+                if i + 1 < self.mr_div_n {
+                    write!(
+                        f,
+                        "{store_unaligned}(
+                            dst,
+                            {mul_addsub}(
+                                {swap_re_im}(acc[{i}][{j}]),
+                                beta_im,
+                                {mul_addsub}(
+                                    acc[{i}][{j}],
+                                    beta_re,
+                                    core::mem::zeroed(),
+                                ),
+                            ),
+                        );\n",
+                    )?;
+                } else {
+                    write!(
+                        f,
+                        "{mask_store_unaligned}(
+                            dst,
+                            last_mask,
+                            {mul_addsub}(
+                                {swap_re_im}(acc[{i}][{j}]),
+                                beta_im,
+                                {mul_addsub}(
+                                    acc[{i}][{j}],
+                                    beta_re,
+                                    core::mem::zeroed(),
+                                ),
+                            ),
+                        );\n"
+                    )?;
+                }
+                write!(f, "}}")?;
+            }
+        }
+        write!(f, "}}")?;
+        write!(f, "else {{")?;
+        write!(f, "let beta_re = {}(beta.re);\n", self.set1)?;
+        write!(f, "let beta_im = {}(beta.im);\n", self.set1)?;
+        write!(f, "let alpha_re = {}(alpha.re);\n", self.set1)?;
+        write!(f, "let alpha_im = {}(alpha.im);\n", self.set1)?;
+        for j in 0..self.nr {
+            for i in 0..self.mr_div_n {
+                write!(f, "{{")?;
+                write!(
+                    f,
+                    "let dst = dst.offset({i} * N + {j} * dst_cs) as *mut {};",
+                    self.ty,
+                )?;
+                if i + 1 < self.mr_div_n {
+                    write!(
+                        f,
+                        "let dst_conj = core::mem::transmute({xor}(
+                            core::mem::transmute({load_unaligned}(dst)),
+                            core::mem::transmute(XOR_MASKS[1]),
+                        ));"
+                    )?;
+
+                    write!(
+                        f,
+                        "{store_unaligned}(
+                            dst,
+                            {mul_addsub}(
+                                {swap_re_im}(acc[{i}][{j}]),
+                                beta_im,
+                                {mul_addsub}(
+                                    acc[{i}][{j}],
+                                    beta_re,
+                                    {mul_addsub}(
+                                        {swap_re_im}(dst_conj),
+                                        alpha_im,
+                                        {mul_addsub}(
+                                            dst_conj,
+                                            alpha_re,
+                                            core::mem::zeroed(),
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        );\n",
+                    )?;
+                } else {
+                    write!(
+                        f,
+                        "let dst_conj = core::mem::transmute({xor}(
+                            core::mem::transmute({}),
+                            core::mem::transmute(XOR_MASKS[1]),
+                        ));",
+                        (self.mask_load_unaligned)(format!("dst"), "last_mask".to_string())
+                    )?;
+
+                    write!(
+                        f,
+                        "{mask_store_unaligned}(
+                            dst,
+                            last_mask,
+                            {mul_addsub}(
+                                {swap_re_im}(acc[{i}][{j}]),
+                                beta_im,
+                                {mul_addsub}(
+                                    acc[{i}][{j}],
+                                    beta_re,
+                                    {mul_addsub}(
+                                        {swap_re_im}(dst_conj),
+                                        alpha_im,
+                                        {mul_addsub}(
+                                            dst_conj,
+                                            alpha_re,
+                                            core::mem::zeroed(),
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        );\n"
+                    )?;
+                }
+                write!(f, "}}")?;
+            }
+        }
+        write!(f, "}}")?;
+
         write!(f, "}}\n")
     }
 }
