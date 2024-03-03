@@ -8,4 +8,19 @@ equator = "0.1.10"
 num-complex = { version = "0.4.5", default-features = false }
 
 [dev-dependencies]
+aligned-vec = "0.5.0"
+divan = "0.1.14"
+itertools = "0.12.1"
+nalgebra = "0.32.4"
+intel-mkl-src = { version = "*" }
+ndarray = { version = "*", features = ["blas"] }
 rand = "0.8.5"
+
+[features]
+default = ["std"]
+std = []
+nightly = []
+
+[[bench]]
+name = "bench"
+harness = false

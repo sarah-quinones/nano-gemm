@@ -4,171 +4,29 @@
 // f32, f64, c32, c64
 
 use std::fmt::Display;
+use std::fmt::Write;
+
+type Str = &'static str;
 
 struct RealKernel {
-    ty: String,
-    reg_ty: String,
-    mask_ty: String,
+    ty: Str,
+    reg_ty: Str,
+    mask_ty: Str,
     // register size
     n: usize,
     mr_div_n: usize,
     nr: usize,
     k: Option<usize>,
 
-    target_features: String,
-    set1: String,
-    load_unaligned: String,
-    store_unaligned: String,
+    target_features: Str,
+    set1: Str,
+    load_unaligned: Str,
+    store_unaligned: Str,
     mask_load_unaligned: Box<dyn Fn(String, String) -> String>,
 
-    mask_store_unaligned: String,
-    mul_add: String,
-    mul: String,
-}
-
-// f32 avx2 example, mr_div_n = 2, nr = 4, kr = Some(3)
-#[allow(dead_code)]
-mod example {
-    // n = 8
-    #[target_feature(enable = "avx,avx2,fma")]
-    pub unsafe fn matmul_2_4_3(
-        k: usize,
-        dst: *mut f32,
-        dst_cs: isize,
-        lhs: *const f32,
-        lhs_cs: isize,
-        rhs: *const f32,
-        rhs_rs: isize,
-        rhs_cs: isize,
-        beta: f32,
-        last_mask: *const (),
-    ) {
-        _ = k;
-        use core::arch::x86_64::*;
-        type Reg = __m256;
-        type Mask = __m256i;
-        const N: isize = 8;
-
-        let mut acc: [[Reg; 4]; 2] = core::mem::zeroed();
-        let mut tmp_lhs: [Reg; 2] = core::mem::zeroed();
-
-        let last_mask = *(last_mask as *const Mask);
-
-        {
-            let depth = 0;
-            tmp_lhs[0] = _mm256_loadu_ps(lhs.offset(depth * lhs_cs + 0));
-            tmp_lhs[1] = _mm256_maskload_ps(lhs.offset(depth * lhs_cs + N), last_mask);
-
-            let tmp_rhs = _mm256_set1_ps(*rhs.offset(depth * rhs_rs + 0 * rhs_cs));
-            acc[0][0] = _mm256_mul_ps(tmp_lhs[0], tmp_rhs);
-            acc[1][0] = _mm256_mul_ps(tmp_lhs[1], tmp_rhs);
-
-            let tmp_rhs = _mm256_set1_ps(*rhs.offset(depth * rhs_rs + 1 * rhs_cs));
-            acc[0][1] = _mm256_mul_ps(tmp_lhs[0], tmp_rhs);
-            acc[1][1] = _mm256_mul_ps(tmp_lhs[1], tmp_rhs);
-
-            let tmp_rhs = _mm256_set1_ps(*rhs.offset(depth * rhs_rs + 2 * rhs_cs));
-            acc[0][2] = _mm256_mul_ps(tmp_lhs[0], tmp_rhs);
-            acc[1][2] = _mm256_mul_ps(tmp_lhs[1], tmp_rhs);
-
-            let tmp_rhs = _mm256_set1_ps(*rhs.offset(depth * rhs_rs + 3 * rhs_cs));
-            acc[0][3] = _mm256_mul_ps(tmp_lhs[0], tmp_rhs);
-            acc[1][3] = _mm256_mul_ps(tmp_lhs[1], tmp_rhs);
-        }
-        {
-            let depth = 1;
-            tmp_lhs[0] = _mm256_loadu_ps(lhs.offset(depth * lhs_cs + 0));
-            tmp_lhs[1] = _mm256_maskload_ps(lhs.offset(depth * lhs_cs + N), last_mask);
-
-            let tmp_rhs = _mm256_set1_ps(*rhs.offset(depth * rhs_rs + 0 * rhs_cs));
-            acc[0][0] = _mm256_fmadd_ps(tmp_lhs[0], tmp_rhs, acc[0][0]);
-            acc[1][0] = _mm256_fmadd_ps(tmp_lhs[1], tmp_rhs, acc[1][0]);
-
-            let tmp_rhs = _mm256_set1_ps(*rhs.offset(depth * rhs_rs + 1 * rhs_cs));
-            acc[0][1] = _mm256_fmadd_ps(tmp_lhs[0], tmp_rhs, acc[0][0]);
-            acc[1][1] = _mm256_fmadd_ps(tmp_lhs[1], tmp_rhs, acc[1][0]);
-
-            let tmp_rhs = _mm256_set1_ps(*rhs.offset(depth * rhs_rs + 2 * rhs_cs));
-            acc[0][2] = _mm256_mul_ps(tmp_lhs[0], tmp_rhs);
-            acc[1][2] = _mm256_mul_ps(tmp_lhs[1], tmp_rhs);
-
-            let tmp_rhs = _mm256_set1_ps(*rhs.offset(depth * rhs_rs + 3 * rhs_cs));
-            acc[0][3] = _mm256_mul_ps(tmp_lhs[0], tmp_rhs);
-            acc[1][3] = _mm256_mul_ps(tmp_lhs[1], tmp_rhs);
-        }
-        {
-            let depth = 2;
-            tmp_lhs[0] = _mm256_loadu_ps(lhs.offset(depth * lhs_cs + 0));
-            tmp_lhs[1] = _mm256_maskload_ps(lhs.offset(depth * lhs_cs + N), last_mask);
-
-            let tmp_rhs = _mm256_set1_ps(*rhs.offset(depth * rhs_rs + 0 * rhs_cs));
-            acc[0][0] = _mm256_fmadd_ps(tmp_lhs[0], tmp_rhs, acc[0][0]);
-            acc[1][0] = _mm256_fmadd_ps(tmp_lhs[1], tmp_rhs, acc[1][0]);
-
-            let tmp_rhs = _mm256_set1_ps(*rhs.offset(depth * rhs_rs + 1 * rhs_cs));
-            acc[0][1] = _mm256_fmadd_ps(tmp_lhs[0], tmp_rhs, acc[0][0]);
-            acc[1][1] = _mm256_fmadd_ps(tmp_lhs[1], tmp_rhs, acc[1][0]);
-
-            let tmp_rhs = _mm256_set1_ps(*rhs.offset(depth * rhs_rs + 2 * rhs_cs));
-            acc[0][2] = _mm256_mul_ps(tmp_lhs[0], tmp_rhs);
-            acc[1][2] = _mm256_mul_ps(tmp_lhs[1], tmp_rhs);
-
-            let tmp_rhs = _mm256_set1_ps(*rhs.offset(depth * rhs_rs + 3 * rhs_cs));
-            acc[0][3] = _mm256_mul_ps(tmp_lhs[0], tmp_rhs);
-            acc[1][3] = _mm256_mul_ps(tmp_lhs[1], tmp_rhs);
-        }
-
-        let beta = _mm256_set1_ps(beta);
-
-        {
-            let dst = dst.offset(0 + 0 * dst_cs);
-            _mm256_storeu_ps(dst, _mm256_fmadd_ps(beta, acc[0][0], _mm256_loadu_ps(dst)));
-        }
-        {
-            let dst = dst.offset(0 + 1 * dst_cs);
-            _mm256_storeu_ps(dst, _mm256_fmadd_ps(beta, acc[0][1], _mm256_loadu_ps(dst)));
-        }
-        {
-            let dst = dst.offset(0 + 2 * dst_cs);
-            _mm256_storeu_ps(dst, _mm256_fmadd_ps(beta, acc[0][2], _mm256_loadu_ps(dst)));
-        }
-        {
-            let dst = dst.offset(0 + 3 * dst_cs);
-            _mm256_storeu_ps(dst, _mm256_fmadd_ps(beta, acc[0][3], _mm256_loadu_ps(dst)));
-        }
-        {
-            let dst = dst.offset(N + 0 * dst_cs);
-            _mm256_maskstore_ps(
-                dst,
-                last_mask,
-                _mm256_fmadd_ps(beta, acc[1][0], _mm256_maskload_ps(dst, last_mask)),
-            );
-        }
-        {
-            let dst = dst.offset(N + 1 * dst_cs);
-            _mm256_maskstore_ps(
-                dst,
-                last_mask,
-                _mm256_fmadd_ps(beta, acc[1][1], _mm256_maskload_ps(dst, last_mask)),
-            );
-        }
-        {
-            let dst = dst.offset(N + 2 * dst_cs);
-            _mm256_maskstore_ps(
-                dst,
-                last_mask,
-                _mm256_fmadd_ps(beta, acc[1][2], _mm256_maskload_ps(dst, last_mask)),
-            );
-        }
-        {
-            let dst = dst.offset(N + 3 * dst_cs);
-            _mm256_maskstore_ps(
-                dst,
-                last_mask,
-                _mm256_fmadd_ps(beta, acc[1][3], _mm256_maskload_ps(dst, last_mask)),
-            );
-        }
-    }
+    mask_store_unaligned: Str,
+    mul_add: Str,
+    mul: Str,
 }
 
 impl Display for RealKernel {
@@ -180,22 +38,17 @@ impl Display for RealKernel {
         // the actual number of rows is between mr_div_n * (n-1) and mr_div_n * n
         write!(
             f,
-            "#[target_feature(enable = \"{}\")]\n",
+            "
+            #[target_feature(enable = \"{}\")]\n",
             self.target_features
         )?;
         write!(
             f,
             r#"pub unsafe fn matmul_{0:}_{1:}_{2:}(
-                k: usize,
+                &crate::MicroKernelData {{ alpha, beta, k, dst_cs, lhs_cs, rhs_rs, rhs_cs, last_mask }}: &crate::MicroKernelData< {3:} >,
                 dst: *mut {3:},
-                dst_cs: isize,
                 lhs: *const {3:},
-                lhs_cs: isize,
                 rhs: *const {3:},
-                rhs_rs: isize,
-                rhs_cs: isize,
-                beta: {3:},
-                last_mask: *const (),
             ) {{
 "#,
             self.mr_div_n,
@@ -203,7 +56,6 @@ impl Display for RealKernel {
             self.k.map(|k| k.to_string()).unwrap_or("dyn".to_string()),
             self.ty,
         )?;
-
         write!(
             f,
             r#"
@@ -258,7 +110,7 @@ impl Display for RealKernel {
                 }
             }
         } else {
-            write!(f, "for depth in 0..k {{")?;
+            write!(f, "for depth in 0..k as isize {{")?;
             for i in 0..self.mr_div_n {
                 self.write_load_lhs(i, f)?;
             }
@@ -280,6 +132,7 @@ impl Display for RealKernel {
             write!(f, "}}")?;
         }
 
+        write!(f, "if alpha == 1.0 {{")?;
         write!(f, "let beta = {}(beta);\n", self.set1)?;
         for j in 0..self.nr {
             for i in 0..self.mr_div_n {
@@ -303,6 +156,57 @@ impl Display for RealKernel {
                 write!(f, "}}")?;
             }
         }
+        write!(f, "}}")?;
+        write!(f, "else if alpha == 0.0 {{")?;
+        write!(f, "let beta = {}(beta);\n", self.set1)?;
+        for j in 0..self.nr {
+            for i in 0..self.mr_div_n {
+                write!(f, "{{")?;
+                write!(f, "let dst = dst.offset({i} * N + {j} * dst_cs);")?;
+                if i + 1 < self.mr_div_n {
+                    write!(
+                        f,
+                        "{}(dst, {}(beta, acc[{i}][{j}]));\n",
+                        self.store_unaligned, self.mul
+                    )?;
+                } else {
+                    write!(
+                        f,
+                        "{}(dst, last_mask, {}(beta, acc[{i}][{j}]));\n",
+                        self.mask_store_unaligned, self.mul,
+                    )?;
+                }
+                write!(f, "}}")?;
+            }
+        }
+        write!(f, "}}")?;
+        write!(f, "else {{")?;
+        write!(f, "let beta = {}(beta);\n", self.set1)?;
+        write!(f, "let alpha = {}(alpha);\n", self.set1)?;
+        for j in 0..self.nr {
+            for i in 0..self.mr_div_n {
+                write!(f, "{{")?;
+                write!(f, "let dst = dst.offset({i} * N + {j} * dst_cs);")?;
+                if i + 1 < self.mr_div_n {
+                    write!(
+                        f,
+                        "{}(dst, {}(beta, acc[{i}][{j}], {}({}(dst), alpha)));\n",
+                        self.store_unaligned, self.mul_add, self.mul, self.load_unaligned
+                    )?;
+                } else {
+                    write!(
+                        f,
+                        "{}(dst, last_mask, {}(beta, acc[{i}][{j}], {}({}, alpha)));\n",
+                        self.mask_store_unaligned,
+                        self.mul_add,
+                        self.mul,
+                        (self.mask_load_unaligned)(format!("dst"), "last_mask".to_string()),
+                    )?;
+                }
+                write!(f, "}}")?;
+            }
+        }
+        write!(f, "}}")?;
 
         write!(f, "}}\n")
     }
@@ -333,26 +237,180 @@ impl RealKernel {
     }
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = std::env::var_os("OUT_DIR").unwrap();
     let dest_path = std::path::Path::new(&out_dir).join("codegen.rs");
-    let kernel = RealKernel {
-        ty: "f32".to_string(),
-        reg_ty: "__m256".to_string(),
-        mask_ty: "__m256i".to_string(),
-        mr_div_n: 2,
-        nr: 4,
-        k: Some(3),
-        target_features: "avx,avx2,fma".to_string(),
-        n: 8,
-        set1: "_mm256_set1_ps".to_string(),
-        load_unaligned: "_mm256_loadu_ps".to_string(),
-        store_unaligned: "_mm256_storeu_ps".to_string(),
-        mask_load_unaligned: Box::new(|ptr, mask| format!("_mm256_maskload_ps({ptr}, {mask})")),
-        mask_store_unaligned: "_mm256_maskstore_ps".to_string(),
-        mul_add: "_mm256_fmadd_ps".to_string(),
-        mul: "_mm256_mul_ps".to_string(),
-    };
-    std::fs::write(&dest_path, format!("{kernel}")).unwrap();
+
+    let mut code = String::new();
+
+    write!(
+        code,
+        r#"
+            #[cfg(target_arch = "x86_64")]
+            use core::arch::x86_64::*;
+            #[cfg(target_arch = "x86")]
+            use core::arch::x86::*;
+        "#
+    )?;
+    write!(
+        code,
+        "
+        #[cfg(any(target_arch = \"x86\", target_arch = \"x86_64\"))]
+        pub mod avx {{\n"
+    )?;
+    write!(code, "pub mod f32 {{\n")?;
+    for mr_div_n in 1..=2 {
+        for nr in 1..=4 {
+            for k in (1..=16).into_iter().map(Some).chain([None]) {
+                let kernel = RealKernel {
+                    ty: "f32",
+                    reg_ty: "__m256",
+                    mask_ty: "__m256i",
+                    mr_div_n,
+                    nr,
+                    k,
+                    target_features: "avx,avx2,fma",
+                    n: 8,
+                    set1: "_mm256_set1_ps",
+                    load_unaligned: "_mm256_loadu_ps",
+                    store_unaligned: "_mm256_storeu_ps",
+                    mask_load_unaligned: Box::new(|ptr, mask| {
+                        format!("_mm256_maskload_ps({ptr}, {mask})")
+                    }),
+                    mask_store_unaligned: "_mm256_maskstore_ps",
+                    mul_add: "_mm256_fmadd_ps",
+                    mul: "_mm256_mul_ps",
+                };
+
+                write!(code, "{kernel}")?;
+            }
+        }
+    }
+
+    write!(
+        code,
+        "pub static MICROKERNELS: [[[crate::MicroKernel<f32>; 4]; 2]; 17] = [\n"
+    )?;
+    for k in (1..=16).into_iter().map(Some).chain([None]) {
+        write!(code, "[\n")?;
+        for mr_div_n in 1..=2 {
+            write!(code, "[\n")?;
+            for nr in 1..=4 {
+                write!(
+                    code,
+                    "matmul_{mr_div_n}_{nr}_{},",
+                    k.map(|k| k.to_string()).unwrap_or("dyn".to_string()),
+                )?;
+            }
+            write!(code, "],\n")?;
+        }
+        write!(code, "],\n")?;
+    }
+    write!(code, "];\n")?;
+    write!(
+        code,
+        "
+            pub static MASKS: [crate::__m256i; 8] = unsafe {{ core::mem::transmute([
+                [u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX],
+
+                [u32::MAX, 0, 0, 0, 0, 0, 0, 0],
+                [u32::MAX, u32::MAX, 0, 0, 0, 0, 0, 0],
+                [u32::MAX, u32::MAX, u32::MAX, 0, 0, 0, 0, 0],
+                [u32::MAX, u32::MAX, u32::MAX, u32::MAX, 0, 0, 0, 0],
+                [u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX, 0, 0, 0],
+                [u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX, 0, 0],
+                [u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX, 0],
+            ]) }};
+        "
+    )?;
+
+    write!(code, "}}\n")?;
+    write!(code, "}}\n")?;
+
+    write!(
+        code,
+        "
+        #[cfg(any(target_arch = \"x86\", target_arch = \"x86_64\"))]
+        #[cfg(feature = \"nightly\")]
+        pub mod avx512 {{\n"
+    )?;
+    write!(code, "pub mod f32 {{\n")?;
+    for mr_div_n in 1..=2 {
+        for nr in 1..=4 {
+            for k in (1..=16).into_iter().map(Some).chain([None]) {
+                let kernel = RealKernel {
+                    ty: "f32",
+                    reg_ty: "__m512",
+                    mask_ty: "u16",
+                    mr_div_n,
+                    nr,
+                    k,
+                    target_features: "avx512f",
+                    n: 16,
+                    set1: "_mm512_set1_ps",
+                    load_unaligned: "_mm512_loadu_ps",
+                    store_unaligned: "_mm512_storeu_ps",
+                    mask_load_unaligned: Box::new(|ptr, mask| {
+                        format!("_mm512_maskz_loadu_ps({mask}, {ptr})")
+                    }),
+                    mask_store_unaligned: "_mm512_mask_storeu_ps",
+                    mul_add: "_mm512_fmadd_ps",
+                    mul: "_mm512_mul_ps",
+                };
+
+                write!(code, "{kernel}")?;
+            }
+        }
+    }
+
+    write!(
+        code,
+        "pub static MICROKERNELS: [[[crate::MicroKernel<f32>; 4]; 2]; 17] = [\n"
+    )?;
+    for k in (1..=16).into_iter().map(Some).chain([None]) {
+        write!(code, "[\n")?;
+        for mr_div_n in 1..=2 {
+            write!(code, "[\n")?;
+            for nr in 1..=4 {
+                write!(
+                    code,
+                    "matmul_{mr_div_n}_{nr}_{},",
+                    k.map(|k| k.to_string()).unwrap_or("dyn".to_string()),
+                )?;
+            }
+            write!(code, "],\n")?;
+        }
+        write!(code, "],\n")?;
+    }
+    write!(code, "];\n")?;
+    write!(
+        code,
+        "
+            pub static MASKS: [u16; 16] = [
+                0b1111_1111_1111_1111,
+                0b0000_0000_0000_0001,
+                0b0000_0000_0000_0011,
+                0b0000_0000_0000_0111,
+                0b0000_0000_0000_1111,
+                0b0000_0000_0001_1111,
+                0b0000_0000_0011_1111,
+                0b0000_0000_0111_1111,
+                0b0000_0000_1111_1111,
+                0b0000_0001_1111_1111,
+                0b0000_0011_1111_1111,
+                0b0000_0111_1111_1111,
+                0b0000_1111_1111_1111,
+                0b0001_1111_1111_1111,
+                0b0011_1111_1111_1111,
+                0b0111_1111_1111_1111,
+            ];
+        "
+    )?;
+
+    write!(code, "}}\n")?;
+    write!(code, "}}\n")?;
+
+    std::fs::write(&dest_path, format!("{code}")).unwrap();
     println!("cargo:rerun-if-changed=build.rs");
+    Ok(())
 }
