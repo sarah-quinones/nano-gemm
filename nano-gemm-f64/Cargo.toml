@@ -1,0 +1,14 @@
+[package]
+name = "nano-gemm-f64"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+nano-gemm-core = { version = "0.1", path = "../nano-gemm-core" }
+
+[build-dependencies]
+nano-gemm-codegen = { version = "0.1", path = "../nano-gemm-codegen" }
+
+[features]
+default = []
+nightly = []

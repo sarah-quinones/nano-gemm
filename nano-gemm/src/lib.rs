@@ -6,28 +6,20 @@
 use core::mem::MaybeUninit;
 use equator::debug_assert;
 
-include!(concat!(env!("OUT_DIR"), "/codegen.rs"));
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+pub mod x86 {
+    pub use nano_gemm_c32::x86::*;
+    pub use nano_gemm_c64::x86::*;
+    pub use nano_gemm_f32::x86::*;
+    pub use nano_gemm_f64::x86::*;
+}
 
 #[allow(non_camel_case_types)]
 pub type c32 = num_complex::Complex32;
 #[allow(non_camel_case_types)]
 pub type c64 = num_complex::Complex64;
 
-pub struct MicroKernelData<T> {
-    pub alpha: T,
-    pub beta: T,
-    pub conj_lhs: bool,
-    pub conj_rhs: bool,
-    pub k: usize,
-    pub dst_cs: isize,
-    pub lhs_cs: isize,
-    pub rhs_rs: isize,
-    pub rhs_cs: isize,
-    pub last_mask: *const (),
-}
-
-pub type MicroKernel<T> =
-    unsafe fn(data: &MicroKernelData<T>, dst: *mut T, lhs: *const T, rhs: *const T);
+pub use nano_gemm_core::*;
 
 #[derive(Debug, Copy, Clone)]
 pub struct Plan<T> {
@@ -98,7 +90,7 @@ unsafe fn noop_millikernel<T: Copy>(
 
 #[allow(unused_variables)]
 unsafe fn naive_millikernel<
-    T: Copy + core::ops::Mul<Output = T> + core::ops::Add<Output = T> + PartialEq,
+    T: Copy + core::ops::Mul<Output = T> + core::ops::Add<Output = T> + PartialEq + Conj,
 >(
     microkernels: &[[MaybeUninit<MicroKernel<T>>; 2]; 2],
     mr: usize,
@@ -128,9 +120,11 @@ unsafe fn naive_millikernel<
             for i in 0..m {
                 let mut acc = zero;
                 for depth in 0..k {
+                    let lhs = *lhs.offset(lhs_rs * i as isize + lhs_cs * depth as isize);
+                    let rhs = *rhs.offset(rhs_rs * depth as isize + rhs_cs * j as isize);
                     acc = acc
-                        + *lhs.offset(lhs_rs * i as isize + lhs_cs * depth as isize)
-                            * *rhs.offset(rhs_rs * depth as isize + rhs_cs * j as isize);
+                        + if conj_lhs { lhs.conj() } else { lhs }
+                            * if conj_rhs { rhs.conj() } else { rhs };
                 }
                 *dst.offset(dst_rs * i as isize + dst_cs * j as isize) = beta * acc;
             }
@@ -140,9 +134,11 @@ unsafe fn naive_millikernel<
             for i in 0..m {
                 let mut acc = zero;
                 for depth in 0..k {
+                    let lhs = *lhs.offset(lhs_rs * i as isize + lhs_cs * depth as isize);
+                    let rhs = *rhs.offset(rhs_rs * depth as isize + rhs_cs * j as isize);
                     acc = acc
-                        + *lhs.offset(lhs_rs * i as isize + lhs_cs * depth as isize)
-                            * *rhs.offset(rhs_rs * depth as isize + rhs_cs * j as isize);
+                        + if conj_lhs { lhs.conj() } else { lhs }
+                            * if conj_rhs { rhs.conj() } else { rhs };
                 }
                 let dst = dst.offset(dst_rs * i as isize + dst_cs * j as isize);
                 *dst = alpha * *dst + beta * acc;
@@ -192,6 +188,87 @@ unsafe fn fill_millikernel<T: Copy + PartialEq + core::ops::Mul<Output = T>>(
     }
 }
 
+#[inline(always)]
+unsafe fn small_direct_millikernel<
+    T: Copy,
+    const M_DIVCEIL_MR: usize,
+    const N_DIVCEIL_NR: usize,
+>(
+    microkernels: &[[MaybeUninit<MicroKernel<T>>; 2]; 2],
+    mr: usize,
+    nr: usize,
+    m: usize,
+    n: usize,
+    k: usize,
+    dst: *mut T,
+    dst_rs: isize,
+    dst_cs: isize,
+    lhs: *const T,
+    lhs_rs: isize,
+    lhs_cs: isize,
+    rhs: *const T,
+    rhs_rs: isize,
+    rhs_cs: isize,
+    alpha: T,
+    beta: T,
+    conj_lhs: bool,
+    conj_rhs: bool,
+    full_mask: *const (),
+    last_mask: *const (),
+) {
+    _ = (m, n);
+    debug_assert!(all(lhs_rs == 1, dst_rs == 1));
+
+    let mut data = MicroKernelData {
+        alpha,
+        beta,
+        conj_lhs,
+        conj_rhs,
+        k,
+        dst_cs,
+        lhs_cs,
+        rhs_rs,
+        rhs_cs,
+        last_mask,
+    };
+
+    let mut i = 0usize;
+    while i < M_DIVCEIL_MR {
+        data.last_mask = if i + 1 < M_DIVCEIL_MR {
+            full_mask
+        } else {
+            last_mask
+        };
+
+        let microkernels = microkernels.get_unchecked((i + 1 >= M_DIVCEIL_MR) as usize);
+        {
+            let i = i * mr;
+            let dst = dst.offset(i as isize);
+
+            let mut j = 0usize;
+            while j < N_DIVCEIL_NR {
+                let microkernel = microkernels
+                    .get_unchecked((j + 1 >= N_DIVCEIL_NR) as usize)
+                    .assume_init();
+
+                {
+                    let j = j * nr;
+                    microkernel(
+                        &data,
+                        dst.offset(j as isize * dst_cs),
+                        lhs.offset(i as isize),
+                        rhs.offset(j as isize * rhs_cs),
+                    );
+                }
+
+                j += 1;
+            }
+        }
+        i += 1;
+    }
+}
+
+#[inline(always)]
 unsafe fn direct_millikernel<T: Copy>(
     microkernels: &[[MaybeUninit<MicroKernel<T>>; 2]; 2],
     mr: usize,
@@ -259,6 +336,9 @@ unsafe fn direct_millikernel<T: Copy>(
 trait One {
     const ONE: Self;
 }
+trait Conj {
+    fn conj(self) -> Self;
+}
 
 impl One for f32 {
     const ONE: Self = 1.0;
@@ -271,6 +351,32 @@ impl One for c32 {
 }
 impl One for c64 {
     const ONE: Self = Self { re: 1.0, im: 0.0 };
+}
+
+impl Conj for f32 {
+    #[inline]
+    fn conj(self) -> Self {
+        self
+    }
+}
+impl Conj for f64 {
+    #[inline]
+    fn conj(self) -> Self {
+        self
+    }
+}
+
+impl Conj for c32 {
+    #[inline]
+    fn conj(self) -> Self {
+        Self::conj(&self)
+    }
+}
+impl Conj for c64 {
+    #[inline]
+    fn conj(self) -> Self {
+        Self::conj(&self)
+    }
 }
 
 unsafe fn copy_millikernel<T: Copy + One>(
@@ -413,8 +519,83 @@ unsafe fn copy_millikernel<T: Copy + One>(
     }
 }
 
+impl<T> Plan<T> {
+    #[inline(always)]
+    fn from_impl<const MR_DIV_N: usize, const NR: usize, const N: usize, Mask>(
+        const_microkernels: &[[[MicroKernel<T>; NR]; MR_DIV_N]; 17],
+        const_masks: Option<&[Mask; N]>,
+        m: usize,
+        n: usize,
+        k: usize,
+        is_col_major: bool,
+    ) -> Self
+    where
+        T: Copy + PartialEq + core::ops::Add<Output = T> + core::ops::Mul<Output = T> + Conj + One,
+    {
+        let mut microkernels = [[MaybeUninit::<MicroKernel<T>>::uninit(); 2]; 2];
+
+        let mr = MR_DIV_N * N;
+        let nr = NR;
+
+        {
+            let k = Ord::min(k.wrapping_sub(1), 16);
+            let m = (m.wrapping_sub(1) / N) % (mr / N);
+            let n = n.wrapping_sub(1) % nr;
+
+            microkernels[0][0].write(const_microkernels[k][MR_DIV_N - 1][NR - 1]);
+            microkernels[0][1].write(const_microkernels[k][MR_DIV_N - 1][n]);
+            microkernels[1][0].write(const_microkernels[k][m][NR - 1]);
+            microkernels[1][1].write(const_microkernels[k][m][n]);
+        }
+
+        Self {
+            microkernels,
+            millikernel: if m == 0 || n == 0 {
+                noop_millikernel
+            } else if k == 0 {
+                fill_millikernel
+            } else if is_col_major {
+                if m <= mr && n <= nr {
+                    small_direct_millikernel::<_, 1, 1>
+                } else if m <= mr && n <= 2 * nr {
+                    small_direct_millikernel::<_, 1, 2>
+                } else if m <= 2 * mr && n <= nr {
+                    small_direct_millikernel::<_, 2, 1>
+                } else if m <= 2 * mr && n <= 2 * nr {
+                    small_direct_millikernel::<_, 2, 2>
+                } else {
+                    direct_millikernel
+                }
+            } else {
+                copy_millikernel
+            },
+            mr,
+            nr,
+            m,
+            n,
+            k,
+            dst_rs: if is_col_major { 1 } else { isize::MIN },
+            dst_cs: isize::MIN,
+            lhs_rs: if is_col_major { 1 } else { isize::MIN },
+            lhs_cs: isize::MIN,
+            rhs_cs: isize::MIN,
+            rhs_rs: isize::MIN,
+            full_mask: if let Some(const_masks) = const_masks {
+                (&const_masks[0]) as *const _ as *const ()
+            } else {
+                &()
+            },
+            last_mask: if let Some(const_masks) = const_masks {
+                (&const_masks[m % N]) as *const _ as *const ()
+            } else {
+                &()
+            },
+        }
+    }
+}
+
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-pub mod x86 {
+pub mod x86_api {
     use super::*;
     use equator::debug_assert;
 
@@ -439,127 +620,65 @@ pub mod x86 {
             }
         }
 
+        fn new_f32x1(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+            use x86::f32::f32x1::*;
+            Self::from_impl::<MR_DIV_N, NR, N, ()>(&MICROKERNELS, None, m, n, k, is_col_major)
+        }
+        fn new_f32x2(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+            use x86::f32::f32x2::*;
+            Self::from_impl::<MR_DIV_N, NR, N, ()>(&MICROKERNELS, None, m, n, k, is_col_major)
+        }
+        fn new_f32x4(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+            use x86::f32::f32x4::*;
+            Self::from_impl(&MICROKERNELS, Some(&MASKS), m, n, k, is_col_major)
+        }
+
         fn new_f32_avx(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
-            let mut microkernels = [[MaybeUninit::<MicroKernel<f32>>::uninit(); 2]; 2];
-
-            let mr = 2 * 8;
-            let nr = 4;
-
-            {
-                let k = Ord::min(k.wrapping_sub(1), 16);
-                let m = (m.wrapping_sub(1) / 8) % (mr / 8);
-                let n = n.wrapping_sub(1) % nr;
-
-                microkernels[0][0].write(avx::f32::MICROKERNELS[k][1][3]);
-                microkernels[0][1].write(avx::f32::MICROKERNELS[k][1][n]);
-                microkernels[1][0].write(avx::f32::MICROKERNELS[k][m][3]);
-                microkernels[1][1].write(avx::f32::MICROKERNELS[k][m][n]);
-            }
-
-            Self {
-                microkernels,
-                millikernel: if m == 0 || n == 0 {
-                    noop_millikernel
-                } else if k == 0 {
-                    fill_millikernel
-                } else if is_col_major {
-                    direct_millikernel
-                } else {
-                    copy_millikernel
-                },
-                mr,
-                nr,
-                m,
-                n,
-                k,
-                dst_rs: if is_col_major { 1 } else { isize::MIN },
-                dst_cs: isize::MIN,
-                lhs_rs: if is_col_major { 1 } else { isize::MIN },
-                lhs_cs: isize::MIN,
-                rhs_cs: isize::MIN,
-                rhs_rs: isize::MIN,
-                full_mask: (&avx::f32::MASKS[0]) as *const _ as *const (),
-                last_mask: (&avx::f32::MASKS[m % 8]) as *const _ as *const (),
-            }
+            use x86::f32::avx::*;
+            Self::from_impl(&MICROKERNELS, Some(&MASKS), m, n, k, is_col_major)
         }
 
         #[cfg(feature = "nightly")]
         fn new_f32_avx512(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
-            let mut microkernels = [[MaybeUninit::<MicroKernel<f32>>::uninit(); 2]; 2];
+            use x86::f32::avx512::*;
+            Self::from_impl(&MICROKERNELS, Some(&MASKS), m, n, k, is_col_major)
+        }
 
-            let mr = 2 * 16;
-            let nr = 4;
+        #[track_caller]
+        pub fn new_f32_impl(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+            #[cfg(feature = "nightly")]
+            if m > 8 && std::is_x86_feature_detected!("avx512f") {
+                return Self::new_f32_avx512(m, n, k, is_col_major);
+            }
 
+            if std::is_x86_feature_detected!("avx")
+                && std::is_x86_feature_detected!("avx2")
+                && std::is_x86_feature_detected!("fma")
             {
-                let k = Ord::min(k.wrapping_sub(1), 16);
-                let m = (m.wrapping_sub(1) / 16) % (mr / 16);
-                let n = n.wrapping_sub(1) % nr;
+                if m == 1 {
+                    return Self::new_f32x1(m, n, k, is_col_major);
+                }
+                if m == 2 {
+                    return Self::new_f32x2(m, n, k, is_col_major);
+                }
+                if m <= 4 {
+                    return Self::new_f32x4(m, n, k, is_col_major);
+                }
 
-                microkernels[0][0].write(avx512::f32::MICROKERNELS[k][1][3]);
-                microkernels[0][1].write(avx512::f32::MICROKERNELS[k][1][n]);
-                microkernels[1][0].write(avx512::f32::MICROKERNELS[k][m][3]);
-                microkernels[1][1].write(avx512::f32::MICROKERNELS[k][m][n]);
+                return Self::new_f32_avx(m, n, k, is_col_major);
             }
 
-            Self {
-                microkernels,
-                millikernel: if m == 0 || n == 0 {
-                    noop_millikernel
-                } else if k == 0 {
-                    fill_millikernel
-                } else if is_col_major {
-                    direct_millikernel
-                } else {
-                    copy_millikernel
-                },
-                mr,
-                nr,
-                m,
-                n,
-                k,
-                dst_rs: if is_col_major { 1 } else { isize::MIN },
-                dst_cs: isize::MIN,
-                lhs_rs: if is_col_major { 1 } else { isize::MIN },
-                lhs_cs: isize::MIN,
-                rhs_cs: isize::MIN,
-                rhs_rs: isize::MIN,
-                full_mask: (&avx512::f32::MASKS[0]) as *const _ as *const (),
-                last_mask: (&avx512::f32::MASKS[m % 16]) as *const _ as *const (),
-            }
+            Self::new_f32_scalar(m, n, k, is_col_major)
         }
 
         #[track_caller]
         pub fn new_colmajor_lhs_and_dst_f32(m: usize, n: usize, k: usize) -> Self {
-            #[cfg(feature = "nightly")]
-            if std::is_x86_feature_detected!("avx512f") {
-                return Self::new_f32_avx512(m, n, k, true);
-            }
-
-            if std::is_x86_feature_detected!("avx")
-                && std::is_x86_feature_detected!("avx2")
-                && std::is_x86_feature_detected!("fma")
-            {
-                return Self::new_f32_avx(m, n, k, true);
-            }
-
-            Self::new_f32_scalar(m, n, k, true)
+            Self::new_f32_impl(m, n, k, true)
         }
 
         #[track_caller]
         pub fn new_f32(m: usize, n: usize, k: usize) -> Self {
-            #[cfg(feature = "nightly")]
-            if std::is_x86_feature_detected!("avx512f") {
-                return Self::new_f32_avx512(m, n, k, false);
-            }
-
-            if std::is_x86_feature_detected!("avx")
-                && std::is_x86_feature_detected!("avx2")
-                && std::is_x86_feature_detected!("fma")
-            {
-                return Self::new_f32_avx(m, n, k, false);
-            }
-
-            Self::new_f32_scalar(m, n, k, false)
+            Self::new_f32_impl(m, n, k, false)
         }
     }
 
@@ -584,127 +703,58 @@ pub mod x86 {
             }
         }
 
+        fn new_f64x1(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+            use x86::f64::f64x1::*;
+            Self::from_impl::<MR_DIV_N, NR, N, ()>(&MICROKERNELS, None, m, n, k, is_col_major)
+        }
+        fn new_f64x2(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+            use x86::f64::f64x2::*;
+            Self::from_impl::<MR_DIV_N, NR, N, ()>(&MICROKERNELS, None, m, n, k, is_col_major)
+        }
+
         fn new_f64_avx(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
-            let mut microkernels = [[MaybeUninit::<MicroKernel<f64>>::uninit(); 2]; 2];
-
-            let mr = 2 * 4;
-            let nr = 4;
-
-            {
-                let k = Ord::min(k.wrapping_sub(1), 16);
-                let m = (m.wrapping_sub(1) / 4) % (mr / 4);
-                let n = n.wrapping_sub(1) % nr;
-
-                microkernels[0][0].write(avx::f64::MICROKERNELS[k][1][3]);
-                microkernels[0][1].write(avx::f64::MICROKERNELS[k][1][n]);
-                microkernels[1][0].write(avx::f64::MICROKERNELS[k][m][3]);
-                microkernels[1][1].write(avx::f64::MICROKERNELS[k][m][n]);
-            }
-
-            Self {
-                microkernels,
-                millikernel: if m == 0 || n == 0 {
-                    noop_millikernel
-                } else if k == 0 {
-                    fill_millikernel
-                } else if is_col_major {
-                    direct_millikernel
-                } else {
-                    copy_millikernel
-                },
-                mr,
-                nr,
-                m,
-                n,
-                k,
-                dst_rs: if is_col_major { 1 } else { isize::MIN },
-                dst_cs: isize::MIN,
-                lhs_rs: if is_col_major { 1 } else { isize::MIN },
-                lhs_cs: isize::MIN,
-                rhs_cs: isize::MIN,
-                rhs_rs: isize::MIN,
-                full_mask: (&avx::f64::MASKS[0]) as *const _ as *const (),
-                last_mask: (&avx::f64::MASKS[m % 4]) as *const _ as *const (),
-            }
+            use x86::f64::avx::*;
+            Self::from_impl(&MICROKERNELS, Some(&MASKS), m, n, k, is_col_major)
         }
 
         #[cfg(feature = "nightly")]
         fn new_f64_avx512(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
-            let mut microkernels = [[MaybeUninit::<MicroKernel<f64>>::uninit(); 2]; 2];
+            use x86::f64::avx512::*;
+            Self::from_impl(&MICROKERNELS, Some(&MASKS), m, n, k, is_col_major)
+        }
 
-            let mr = 2 * 8;
-            let nr = 4;
+        #[track_caller]
+        pub fn new_f64_impl(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+            #[cfg(feature = "nightly")]
+            if m > 8 && std::is_x86_feature_detected!("avx512f") {
+                return Self::new_f64_avx512(m, n, k, is_col_major);
+            }
 
+            if std::is_x86_feature_detected!("avx")
+                && std::is_x86_feature_detected!("avx2")
+                && std::is_x86_feature_detected!("fma")
             {
-                let k = Ord::min(k.wrapping_sub(1), 16);
-                let m = (m.wrapping_sub(1) / 8) % (mr / 8);
-                let n = n.wrapping_sub(1) % nr;
+                if m == 1 {
+                    return Self::new_f64x1(m, n, k, is_col_major);
+                }
+                if m == 2 {
+                    return Self::new_f64x2(m, n, k, is_col_major);
+                }
 
-                microkernels[0][0].write(avx512::f64::MICROKERNELS[k][1][3]);
-                microkernels[0][1].write(avx512::f64::MICROKERNELS[k][1][n]);
-                microkernels[1][0].write(avx512::f64::MICROKERNELS[k][m][3]);
-                microkernels[1][1].write(avx512::f64::MICROKERNELS[k][m][n]);
+                return Self::new_f64_avx(m, n, k, is_col_major);
             }
 
-            Self {
-                microkernels,
-                millikernel: if m == 0 || n == 0 {
-                    noop_millikernel
-                } else if k == 0 {
-                    fill_millikernel
-                } else if is_col_major {
-                    direct_millikernel
-                } else {
-                    copy_millikernel
-                },
-                mr,
-                nr,
-                m,
-                n,
-                k,
-                dst_rs: if is_col_major { 1 } else { isize::MIN },
-                dst_cs: isize::MIN,
-                lhs_rs: if is_col_major { 1 } else { isize::MIN },
-                lhs_cs: isize::MIN,
-                rhs_cs: isize::MIN,
-                rhs_rs: isize::MIN,
-                full_mask: (&avx512::f64::MASKS[0]) as *const _ as *const (),
-                last_mask: (&avx512::f64::MASKS[m % 8]) as *const _ as *const (),
-            }
+            Self::new_f64_scalar(m, n, k, is_col_major)
         }
 
         #[track_caller]
         pub fn new_colmajor_lhs_and_dst_f64(m: usize, n: usize, k: usize) -> Self {
-            #[cfg(feature = "nightly")]
-            if std::is_x86_feature_detected!("avx512f") {
-                return Self::new_f64_avx512(m, n, k, true);
-            }
-
-            if std::is_x86_feature_detected!("avx")
-                && std::is_x86_feature_detected!("avx2")
-                && std::is_x86_feature_detected!("fma")
-            {
-                return Self::new_f64_avx(m, n, k, true);
-            }
-
-            Self::new_f64_scalar(m, n, k, true)
+            Self::new_f64_impl(m, n, k, true)
         }
 
         #[track_caller]
         pub fn new_f64(m: usize, n: usize, k: usize) -> Self {
-            #[cfg(feature = "nightly")]
-            if std::is_x86_feature_detected!("avx512f") {
-                return Self::new_f64_avx512(m, n, k, false);
-            }
-
-            if std::is_x86_feature_detected!("avx")
-                && std::is_x86_feature_detected!("avx2")
-                && std::is_x86_feature_detected!("fma")
-            {
-                return Self::new_f64_avx(m, n, k, false);
-            }
-
-            Self::new_f64_scalar(m, n, k, false)
+            Self::new_f64_impl(m, n, k, false)
         }
     }
     impl Plan<c32> {
@@ -728,127 +778,58 @@ pub mod x86 {
             }
         }
 
+        fn new_c32x1(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+            use x86::c32::c32x1::*;
+            Self::from_impl::<MR_DIV_N, NR, N, ()>(&MICROKERNELS, None, m, n, k, is_col_major)
+        }
+        fn new_c32x2(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+            use x86::c32::c32x2::*;
+            Self::from_impl::<MR_DIV_N, NR, N, ()>(&MICROKERNELS, None, m, n, k, is_col_major)
+        }
+
         fn new_c32_avx(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
-            let mut microkernels = [[MaybeUninit::<MicroKernel<c32>>::uninit(); 2]; 2];
-
-            let mr = 2 * 4;
-            let nr = 2;
-
-            {
-                let k = Ord::min(k.wrapping_sub(1), 16);
-                let m = (m.wrapping_sub(1) / 4) % (mr / 4);
-                let n = n.wrapping_sub(1) % nr;
-
-                microkernels[0][0].write(avx::c32::MICROKERNELS[k][1][1]);
-                microkernels[0][1].write(avx::c32::MICROKERNELS[k][1][n]);
-                microkernels[1][0].write(avx::c32::MICROKERNELS[k][m][1]);
-                microkernels[1][1].write(avx::c32::MICROKERNELS[k][m][n]);
-            }
-
-            Self {
-                microkernels,
-                millikernel: if m == 0 || n == 0 {
-                    noop_millikernel
-                } else if k == 0 {
-                    fill_millikernel
-                } else if is_col_major {
-                    direct_millikernel
-                } else {
-                    copy_millikernel
-                },
-                mr,
-                nr,
-                m,
-                n,
-                k,
-                dst_rs: if is_col_major { 1 } else { isize::MIN },
-                dst_cs: isize::MIN,
-                lhs_rs: if is_col_major { 1 } else { isize::MIN },
-                lhs_cs: isize::MIN,
-                rhs_cs: isize::MIN,
-                rhs_rs: isize::MIN,
-                full_mask: (&avx::c32::MASKS[0]) as *const _ as *const (),
-                last_mask: (&avx::c32::MASKS[m % 4]) as *const _ as *const (),
-            }
+            use x86::c32::avx::*;
+            Self::from_impl(&MICROKERNELS, Some(&MASKS), m, n, k, is_col_major)
         }
 
         #[cfg(feature = "nightly")]
         fn new_c32_avx512(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
-            let mut microkernels = [[MaybeUninit::<MicroKernel<c32>>::uninit(); 2]; 2];
+            use x86::c32::avx512::*;
+            Self::from_impl(&MICROKERNELS, Some(&MASKS), m, n, k, is_col_major)
+        }
 
-            let mr = 2 * 8;
-            let nr = 2;
+        #[track_caller]
+        pub fn new_c32_impl(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+            #[cfg(feature = "nightly")]
+            if m > 8 && std::is_x86_feature_detected!("avx512f") {
+                return Self::new_c32_avx512(m, n, k, is_col_major);
+            }
 
+            if std::is_x86_feature_detected!("avx")
+                && std::is_x86_feature_detected!("avx2")
+                && std::is_x86_feature_detected!("fma")
             {
-                let k = Ord::min(k.wrapping_sub(1), 16);
-                let m = (m.wrapping_sub(1) / 8) % (mr / 8);
-                let n = n.wrapping_sub(1) % nr;
+                if m == 1 {
+                    return Self::new_c32x1(m, n, k, is_col_major);
+                }
+                if m == 2 {
+                    return Self::new_c32x2(m, n, k, is_col_major);
+                }
 
-                microkernels[0][0].write(avx512::c32::MICROKERNELS[k][1][1]);
-                microkernels[0][1].write(avx512::c32::MICROKERNELS[k][1][n]);
-                microkernels[1][0].write(avx512::c32::MICROKERNELS[k][m][1]);
-                microkernels[1][1].write(avx512::c32::MICROKERNELS[k][m][n]);
+                return Self::new_c32_avx(m, n, k, is_col_major);
             }
 
-            Self {
-                microkernels,
-                millikernel: if m == 0 || n == 0 {
-                    noop_millikernel
-                } else if k == 0 {
-                    fill_millikernel
-                } else if is_col_major {
-                    direct_millikernel
-                } else {
-                    copy_millikernel
-                },
-                mr,
-                nr,
-                m,
-                n,
-                k,
-                dst_rs: if is_col_major { 1 } else { isize::MIN },
-                dst_cs: isize::MIN,
-                lhs_rs: if is_col_major { 1 } else { isize::MIN },
-                lhs_cs: isize::MIN,
-                rhs_cs: isize::MIN,
-                rhs_rs: isize::MIN,
-                full_mask: (&avx512::c32::MASKS[0]) as *const _ as *const (),
-                last_mask: (&avx512::c32::MASKS[m % 8]) as *const _ as *const (),
-            }
+            Self::new_c32_scalar(m, n, k, is_col_major)
         }
 
         #[track_caller]
         pub fn new_colmajor_lhs_and_dst_c32(m: usize, n: usize, k: usize) -> Self {
-            #[cfg(feature = "nightly")]
-            if std::is_x86_feature_detected!("avx512f") {
-                return Self::new_c32_avx512(m, n, k, true);
-            }
-
-            if std::is_x86_feature_detected!("avx")
-                && std::is_x86_feature_detected!("avx2")
-                && std::is_x86_feature_detected!("fma")
-            {
-                return Self::new_c32_avx(m, n, k, true);
-            }
-
-            Self::new_c32_scalar(m, n, k, true)
+            Self::new_c32_impl(m, n, k, true)
         }
 
         #[track_caller]
         pub fn new_c32(m: usize, n: usize, k: usize) -> Self {
-            #[cfg(feature = "nightly")]
-            if std::is_x86_feature_detected!("avx512f") {
-                return Self::new_c32_avx512(m, n, k, false);
-            }
-
-            if std::is_x86_feature_detected!("avx")
-                && std::is_x86_feature_detected!("avx2")
-                && std::is_x86_feature_detected!("fma")
-            {
-                return Self::new_c32_avx(m, n, k, false);
-            }
-
-            Self::new_c32_scalar(m, n, k, false)
+            Self::new_c32_impl(m, n, k, false)
         }
     }
     impl Plan<c64> {
@@ -872,127 +853,50 @@ pub mod x86 {
             }
         }
 
+        fn new_c64x1(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+            use x86::c64::c64x1::*;
+            Self::from_impl::<MR_DIV_N, NR, N, ()>(&MICROKERNELS, None, m, n, k, is_col_major)
+        }
+
         fn new_c64_avx(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
-            let mut microkernels = [[MaybeUninit::<MicroKernel<c64>>::uninit(); 2]; 2];
-
-            let mr = 2 * 2;
-            let nr = 2;
-
-            {
-                let k = Ord::min(k.wrapping_sub(1), 16);
-                let m = (m.wrapping_sub(1) / 2) % (mr / 2);
-                let n = n.wrapping_sub(1) % nr;
-
-                microkernels[0][0].write(avx::c64::MICROKERNELS[k][1][1]);
-                microkernels[0][1].write(avx::c64::MICROKERNELS[k][1][n]);
-                microkernels[1][0].write(avx::c64::MICROKERNELS[k][m][1]);
-                microkernels[1][1].write(avx::c64::MICROKERNELS[k][m][n]);
-            }
-
-            Self {
-                microkernels,
-                millikernel: if m == 0 || n == 0 {
-                    noop_millikernel
-                } else if k == 0 {
-                    fill_millikernel
-                } else if is_col_major {
-                    direct_millikernel
-                } else {
-                    copy_millikernel
-                },
-                mr,
-                nr,
-                m,
-                n,
-                k,
-                dst_rs: if is_col_major { 1 } else { isize::MIN },
-                dst_cs: isize::MIN,
-                lhs_rs: if is_col_major { 1 } else { isize::MIN },
-                lhs_cs: isize::MIN,
-                rhs_cs: isize::MIN,
-                rhs_rs: isize::MIN,
-                full_mask: (&avx::c64::MASKS[0]) as *const _ as *const (),
-                last_mask: (&avx::c64::MASKS[m % 2]) as *const _ as *const (),
-            }
+            use x86::c64::avx::*;
+            Self::from_impl(&MICROKERNELS, Some(&MASKS), m, n, k, is_col_major)
         }
 
         #[cfg(feature = "nightly")]
         fn new_c64_avx512(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
-            let mut microkernels = [[MaybeUninit::<MicroKernel<c64>>::uninit(); 2]; 2];
+            use x86::c64::avx512::*;
+            Self::from_impl(&MICROKERNELS, Some(&MASKS), m, n, k, is_col_major)
+        }
 
-            let mr = 2 * 4;
-            let nr = 2;
+        #[track_caller]
+        pub fn new_c64_impl(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+            #[cfg(feature = "nightly")]
+            if m > 8 && std::is_x86_feature_detected!("avx512f") {
+                return Self::new_c64_avx512(m, n, k, is_col_major);
+            }
 
+            if std::is_x86_feature_detected!("avx")
+                && std::is_x86_feature_detected!("avx2")
+                && std::is_x86_feature_detected!("fma")
             {
-                let k = Ord::min(k.wrapping_sub(1), 16);
-                let m = (m.wrapping_sub(1) / 4) % (mr / 4);
-                let n = n.wrapping_sub(1) % nr;
-
-                microkernels[0][0].write(avx512::c64::MICROKERNELS[k][1][1]);
-                microkernels[0][1].write(avx512::c64::MICROKERNELS[k][1][n]);
-                microkernels[1][0].write(avx512::c64::MICROKERNELS[k][m][1]);
-                microkernels[1][1].write(avx512::c64::MICROKERNELS[k][m][n]);
+                if m == 1 {
+                    return Self::new_c64x1(m, n, k, is_col_major);
+                }
+                return Self::new_c64_avx(m, n, k, is_col_major);
             }
 
-            Self {
-                microkernels,
-                millikernel: if m == 0 || n == 0 {
-                    noop_millikernel
-                } else if k == 0 {
-                    fill_millikernel
-                } else if is_col_major {
-                    direct_millikernel
-                } else {
-                    copy_millikernel
-                },
-                mr,
-                nr,
-                m,
-                n,
-                k,
-                dst_rs: if is_col_major { 1 } else { isize::MIN },
-                dst_cs: isize::MIN,
-                lhs_rs: if is_col_major { 1 } else { isize::MIN },
-                lhs_cs: isize::MIN,
-                rhs_cs: isize::MIN,
-                rhs_rs: isize::MIN,
-                full_mask: (&avx512::c64::MASKS[0]) as *const _ as *const (),
-                last_mask: (&avx512::c64::MASKS[m % 4]) as *const _ as *const (),
-            }
+            Self::new_c64_scalar(m, n, k, is_col_major)
         }
 
         #[track_caller]
         pub fn new_colmajor_lhs_and_dst_c64(m: usize, n: usize, k: usize) -> Self {
-            #[cfg(feature = "nightly")]
-            if std::is_x86_feature_detected!("avx512f") {
-                return Self::new_c64_avx512(m, n, k, true);
-            }
-
-            if std::is_x86_feature_detected!("avx")
-                && std::is_x86_feature_detected!("avx2")
-                && std::is_x86_feature_detected!("fma")
-            {
-                return Self::new_c64_avx(m, n, k, true);
-            }
-
-            Self::new_c64_scalar(m, n, k, true)
+            Self::new_c64_impl(m, n, k, true)
         }
 
         #[track_caller]
         pub fn new_c64(m: usize, n: usize, k: usize) -> Self {
-            #[cfg(feature = "nightly")]
-            if std::is_x86_feature_detected!("avx512f") {
-                return Self::new_c64_avx512(m, n, k, false);
-            }
-
-            if std::is_x86_feature_detected!("avx")
-                && std::is_x86_feature_detected!("avx2")
-                && std::is_x86_feature_detected!("fma")
-            {
-                return Self::new_c64_avx(m, n, k, false);
-            }
-
-            Self::new_c64_scalar(m, n, k, false)
+            Self::new_c64_impl(m, n, k, false)
         }
     }
 
@@ -1099,7 +1003,7 @@ mod tests {
         let alpha = 1.0;
 
         unsafe {
-            avx::f32::matmul_2_4_dyn(
+            x86::f32::avx::matmul_2_4_dyn(
                 &MicroKernelData {
                     alpha,
                     beta,
@@ -1161,7 +1065,7 @@ mod tests {
         for (conj_lhs, conj_rhs) in [(false, false), (false, true), (true, false), (true, true)] {
             let mut dst = c;
             unsafe {
-                avx::c32::matmul_2_2_dyn(
+                x86::c32::avx::matmul_2_2_dyn(
                     &MicroKernelData {
                         alpha,
                         beta,
@@ -1227,7 +1131,7 @@ mod tests {
         for (conj_lhs, conj_rhs) in [(false, false), (false, true), (true, false), (true, true)] {
             let mut dst = c;
             unsafe {
-                avx::c64::matmul_2_2_dyn(
+                x86::c64::avx::matmul_2_2_dyn(
                     &MicroKernelData {
                         alpha,
                         beta,
@@ -1264,6 +1168,7 @@ mod tests {
                     expected_dst[j][i] += beta * acc;
                 }
             }
+            dbg!(dst, expected_dst);
 
             for (&dst, &expected_dst) in
                 core::iter::zip(dst.iter().flatten(), expected_dst.iter().flatten())
@@ -1276,69 +1181,14 @@ mod tests {
     #[test]
     fn test_plan() {
         let gen = |_| rand::random::<f32>();
-        let m = 31;
-        let n = 4;
-        let k = 8;
-
-        let a = (0..m * k).into_iter().map(gen).collect::<Vec<_>>();
-        let b = (0..k * n).into_iter().map(gen).collect::<Vec<_>>();
-        let c = (0..m * n).into_iter().map(|_| 0.0).collect::<Vec<_>>();
-        let mut dst = c.clone();
-
-        let plan = Plan::new_colmajor_lhs_and_dst_f32(m, n, k);
-        let beta = 2.5;
-
-        unsafe {
-            plan.execute_unchecked(
-                m,
-                n,
-                k,
-                dst.as_mut_ptr(),
-                1,
-                m as isize,
-                a.as_ptr(),
-                1,
-                m as isize,
-                b.as_ptr(),
-                1,
-                k as isize,
-                1.0,
-                beta,
-                false,
-                false,
-            );
-        };
-
-        let mut expected_dst = c;
-        for i in 0..m {
-            for j in 0..n {
-                let mut acc = 0.0f32;
-                for depth in 0..k {
-                    acc = f32::mul_add(a[depth * m + i], b[j * k + depth], acc);
-                }
-                expected_dst[j * m + i] = f32::mul_add(beta, acc, expected_dst[j * m + i]);
-            }
-        }
-
-        assert!(dst == expected_dst);
-    }
-
-    #[test]
-    fn test_plan_cplx() {
-        let gen = |_| rand::random::<c64>();
-        let m = 4;
-        let n = 4;
-        let k = 4;
-
-        let a = (0..m * k).into_iter().map(gen).collect::<Vec<_>>();
-        let b = (0..k * n).into_iter().map(gen).collect::<Vec<_>>();
-        let c = (0..m * n).into_iter().map(gen).collect::<Vec<_>>();
-
-        for alpha in [c64::new(0.0, 0.0), c64::new(1.0, 0.0), c64::new(2.7, 3.7)] {
+        for ((m, n), k) in (0..32).zip(0..32).zip([1, 4, 17]) {
+            let a = (0..m * k).into_iter().map(gen).collect::<Vec<_>>();
+            let b = (0..k * n).into_iter().map(gen).collect::<Vec<_>>();
+            let c = (0..m * n).into_iter().map(|_| 0.0).collect::<Vec<_>>();
             let mut dst = c.clone();
 
-            let plan = Plan::new_colmajor_lhs_and_dst_c64(m, n, k);
-            let beta = c64::new(2.5, 0.0);
+            let plan = Plan::new_colmajor_lhs_and_dst_f32(m, n, k);
+            let beta = 2.5;
 
             unsafe {
                 plan.execute_unchecked(
@@ -1354,27 +1204,78 @@ mod tests {
                     b.as_ptr(),
                     1,
                     k as isize,
-                    alpha,
+                    1.0,
                     beta,
                     false,
                     false,
                 );
             };
 
-            let mut expected_dst = c.clone();
+            let mut expected_dst = c;
             for i in 0..m {
                 for j in 0..n {
-                    let mut acc = c64::new(0.0, 0.0);
+                    let mut acc = 0.0f32;
                     for depth in 0..k {
-                        acc += a[depth * m + i] * b[j * k + depth];
+                        acc = f32::mul_add(a[depth * m + i], b[j * k + depth], acc);
                     }
-                    expected_dst[j * m + i] = alpha * expected_dst[j * m + i] + beta * acc;
+                    expected_dst[j * m + i] = f32::mul_add(beta, acc, expected_dst[j * m + i]);
                 }
             }
 
-            for (&dst, &expected_dst) in core::iter::zip(dst.iter(), expected_dst.iter()) {
-                assert!((dst.re - expected_dst.re).abs() < 1e-5);
-                assert!((dst.im - expected_dst.im).abs() < 1e-5);
+            assert!(dst == expected_dst);
+        }
+    }
+
+    #[test]
+    fn test_plan_cplx() {
+        let gen = |_| rand::random::<c64>();
+        for ((m, n), k) in (0..32).zip(0..32).zip([1, 4, 17]) {
+            let a = (0..m * k).into_iter().map(gen).collect::<Vec<_>>();
+            let b = (0..k * n).into_iter().map(gen).collect::<Vec<_>>();
+            let c = (0..m * n).into_iter().map(gen).collect::<Vec<_>>();
+
+            for alpha in [c64::new(0.0, 0.0), c64::new(1.0, 0.0), c64::new(2.7, 3.7)] {
+                let mut dst = c.clone();
+
+                let plan = Plan::new_colmajor_lhs_and_dst_c64(m, n, k);
+                let beta = c64::new(2.5, 0.0);
+
+                unsafe {
+                    plan.execute_unchecked(
+                        m,
+                        n,
+                        k,
+                        dst.as_mut_ptr(),
+                        1,
+                        m as isize,
+                        a.as_ptr(),
+                        1,
+                        m as isize,
+                        b.as_ptr(),
+                        1,
+                        k as isize,
+                        alpha,
+                        beta,
+                        false,
+                        false,
+                    );
+                };
+
+                let mut expected_dst = c.clone();
+                for i in 0..m {
+                    for j in 0..n {
+                        let mut acc = c64::new(0.0, 0.0);
+                        for depth in 0..k {
+                            acc += a[depth * m + i] * b[j * k + depth];
+                        }
+                        expected_dst[j * m + i] = alpha * expected_dst[j * m + i] + beta * acc;
+                    }
+                }
+
+                for (&dst, &expected_dst) in core::iter::zip(dst.iter(), expected_dst.iter()) {
+                    assert!((dst.re - expected_dst.re).abs() < 1e-5);
+                    assert!((dst.im - expected_dst.im).abs() < 1e-5);
+                }
             }
         }
     }
@@ -1382,51 +1283,49 @@ mod tests {
     #[test]
     fn test_plan_strided() {
         let gen = |_| rand::random::<f32>();
-        let m = 31;
-        let n = 4;
-        let k = 8;
+        for ((m, n), k) in (0..32).zip(0..32).zip([1, 4, 17]) {
+            let a = (0..2 * 33 * k).into_iter().map(gen).collect::<Vec<_>>();
+            let b = (0..k * n).into_iter().map(gen).collect::<Vec<_>>();
+            let c = (0..3 * 44 * n).into_iter().map(|_| 0.0).collect::<Vec<_>>();
+            let mut dst = c.clone();
 
-        let a = (0..2 * 33 * k).into_iter().map(gen).collect::<Vec<_>>();
-        let b = (0..k * n).into_iter().map(gen).collect::<Vec<_>>();
-        let c = (0..3 * 44 * n).into_iter().map(|_| 0.0).collect::<Vec<_>>();
-        let mut dst = c.clone();
+            let plan = Plan::new_f32(m, n, k);
+            let beta = 2.5;
 
-        let plan = Plan::new_f32(m, n, k);
-        let beta = 2.5;
+            unsafe {
+                plan.execute_unchecked(
+                    m,
+                    n,
+                    k,
+                    dst.as_mut_ptr(),
+                    3,
+                    44,
+                    a.as_ptr(),
+                    2,
+                    33,
+                    b.as_ptr(),
+                    1,
+                    k as isize,
+                    1.0,
+                    beta,
+                    false,
+                    false,
+                );
+            };
 
-        unsafe {
-            plan.execute_unchecked(
-                m,
-                n,
-                k,
-                dst.as_mut_ptr(),
-                3,
-                44,
-                a.as_ptr(),
-                2,
-                33,
-                b.as_ptr(),
-                1,
-                k as isize,
-                1.0,
-                beta,
-                false,
-                false,
-            );
-        };
-
-        let mut expected_dst = c;
-        for i in 0..m {
-            for j in 0..n {
-                let mut acc = 0.0f32;
-                for depth in 0..k {
-                    acc = f32::mul_add(a[depth * 33 + i * 2], b[j * k + depth], acc);
+            let mut expected_dst = c;
+            for i in 0..m {
+                for j in 0..n {
+                    let mut acc = 0.0f32;
+                    for depth in 0..k {
+                        acc = f32::mul_add(a[depth * 33 + i * 2], b[j * k + depth], acc);
+                    }
+                    expected_dst[j * 44 + i * 3] =
+                        f32::mul_add(beta, acc, expected_dst[j * 44 + i * 3]);
                 }
-                expected_dst[j * 44 + i * 3] =
-                    f32::mul_add(beta, acc, expected_dst[j * 44 + i * 3]);
             }
-        }
 
-        assert!(dst == expected_dst);
+            assert!(dst == expected_dst);
+        }
     }
 }
