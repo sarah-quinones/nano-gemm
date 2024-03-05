@@ -467,7 +467,7 @@ unsafe fn copy_millikernel<T: Copy + One>(
                                 as *const MaybeUninit<T>);
                         }
                     }
-                    for jj in 0..k {
+                    for jj in 0..depth_bs {
                         for ii in 0..i_bs {
                             *(gemm_lhs.offset(ii as isize + gemm_lhs_cs * jj as isize)
                                 as *mut MaybeUninit<T>) = *(lhs
@@ -500,10 +500,10 @@ unsafe fn copy_millikernel<T: Copy + One>(
                         if i + i_bs == m { last_mask } else { full_mask },
                     );
 
-                    for j in 0..n {
-                        for i in 0..m {
-                            *(dst.offset(dst_rs * i as isize + dst_cs * j as isize)
-                                as *mut MaybeUninit<T>) = dst_tmp[j][i];
+                    for jj in 0..j_bs {
+                        for ii in 0..i_bs {
+                            *(dst.offset(dst_rs * ii as isize + dst_cs * jj as isize)
+                                as *mut MaybeUninit<T>) = dst_tmp[jj][ii];
                         }
                     }
 
@@ -726,7 +726,7 @@ pub mod x86_api {
         #[track_caller]
         pub fn new_f64_impl(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
             #[cfg(feature = "nightly")]
-            if m > 8 && std::is_x86_feature_detected!("avx512f") {
+            if m > 4 && std::is_x86_feature_detected!("avx512f") {
                 return Self::new_f64_avx512(m, n, k, is_col_major);
             }
 
@@ -801,7 +801,7 @@ pub mod x86_api {
         #[track_caller]
         pub fn new_c32_impl(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
             #[cfg(feature = "nightly")]
-            if m > 8 && std::is_x86_feature_detected!("avx512f") {
+            if m > 4 && std::is_x86_feature_detected!("avx512f") {
                 return Self::new_c32_avx512(m, n, k, is_col_major);
             }
 
@@ -872,7 +872,7 @@ pub mod x86_api {
         #[track_caller]
         pub fn new_c64_impl(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
             #[cfg(feature = "nightly")]
-            if m > 8 && std::is_x86_feature_detected!("avx512f") {
+            if m > 2 && std::is_x86_feature_detected!("avx512f") {
                 return Self::new_c64_avx512(m, n, k, is_col_major);
             }
 
