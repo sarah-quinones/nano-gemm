@@ -1045,7 +1045,7 @@ mod x86_api {
     use super::*;
 
     impl Plan<f32> {
-        fn new_f32x1(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+        pub fn new_f32x1(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
             use x86::f32::f32x1::*;
             Self::from_masked_impl::<MR_DIV_N, NR, N, ()>(
                 &MICROKERNELS,
@@ -1056,7 +1056,7 @@ mod x86_api {
                 is_col_major,
             )
         }
-        fn new_f32x2(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+        pub fn new_f32x2(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
             use x86::f32::f32x2::*;
             Self::from_masked_impl::<MR_DIV_N, NR, N, ()>(
                 &MICROKERNELS,
@@ -1067,25 +1067,25 @@ mod x86_api {
                 is_col_major,
             )
         }
-        fn new_f32x4(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+        pub fn new_f32x4(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
             use x86::f32::f32x4::*;
             Self::from_masked_impl(&MICROKERNELS, Some(&MASKS), m, n, k, is_col_major)
         }
 
-        fn new_f32_avx(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+        pub fn new_f32_avx(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
             use x86::f32::avx::*;
             Self::from_masked_impl(&MICROKERNELS, Some(&MASKS), m, n, k, is_col_major)
         }
 
         #[cfg(feature = "nightly")]
-        fn new_f32_avx512(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+        pub fn new_f32_avx512(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
             use x86::f32::avx512::*;
             Self::from_masked_impl(&MICROKERNELS, Some(&MASKS), m, n, k, is_col_major)
         }
     }
 
     impl Plan<f64> {
-        fn new_f64x1(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+        pub fn new_f64x1(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
             use x86::f64::f64x1::*;
             Self::from_masked_impl::<MR_DIV_N, NR, N, ()>(
                 &MICROKERNELS,
@@ -1096,7 +1096,7 @@ mod x86_api {
                 is_col_major,
             )
         }
-        fn new_f64x2(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+        pub fn new_f64x2(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
             use x86::f64::f64x2::*;
             Self::from_masked_impl::<MR_DIV_N, NR, N, ()>(
                 &MICROKERNELS,
@@ -1108,19 +1108,19 @@ mod x86_api {
             )
         }
 
-        fn new_f64_avx(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+        pub fn new_f64_avx(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
             use x86::f64::avx::*;
             Self::from_masked_impl(&MICROKERNELS, Some(&MASKS), m, n, k, is_col_major)
         }
 
         #[cfg(feature = "nightly")]
-        fn new_f64_avx512(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+        pub fn new_f64_avx512(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
             use x86::f64::avx512::*;
             Self::from_masked_impl(&MICROKERNELS, Some(&MASKS), m, n, k, is_col_major)
         }
     }
     impl Plan<c32> {
-        fn new_c32x1(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+        pub fn new_c32x1(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
             use x86::c32::c32x1::*;
             Self::from_masked_impl::<MR_DIV_N, NR, N, ()>(
                 &MICROKERNELS,
@@ -1131,7 +1131,7 @@ mod x86_api {
                 is_col_major,
             )
         }
-        fn new_c32x2(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+        pub fn new_c32x2(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
             use x86::c32::c32x2::*;
             Self::from_masked_impl::<MR_DIV_N, NR, N, ()>(
                 &MICROKERNELS,
@@ -1143,19 +1143,19 @@ mod x86_api {
             )
         }
 
-        fn new_c32_avx(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+        pub fn new_c32_avx(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
             use x86::c32::avx::*;
             Self::from_masked_impl(&MICROKERNELS, Some(&MASKS), m, n, k, is_col_major)
         }
 
         #[cfg(feature = "nightly")]
-        fn new_c32_avx512(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+        pub fn new_c32_avx512(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
             use x86::c32::avx512::*;
             Self::from_masked_impl(&MICROKERNELS, Some(&MASKS), m, n, k, is_col_major)
         }
     }
     impl Plan<c64> {
-        fn new_c64x1(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+        pub fn new_c64x1(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
             use x86::c64::c64x1::*;
             Self::from_masked_impl::<MR_DIV_N, NR, N, ()>(
                 &MICROKERNELS,
@@ -1167,13 +1167,13 @@ mod x86_api {
             )
         }
 
-        fn new_c64_avx(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+        pub fn new_c64_avx(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
             use x86::c64::avx::*;
             Self::from_masked_impl(&MICROKERNELS, Some(&MASKS), m, n, k, is_col_major)
         }
 
         #[cfg(feature = "nightly")]
-        fn new_c64_avx512(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+        pub fn new_c64_avx512(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
             use x86::c64::avx512::*;
             Self::from_masked_impl(&MICROKERNELS, Some(&MASKS), m, n, k, is_col_major)
         }
