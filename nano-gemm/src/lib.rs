@@ -268,7 +268,6 @@ unsafe fn small_direct_millikernel<
     }
 }
 
-#[inline(always)]
 unsafe fn direct_millikernel<T: Copy>(
     microkernels: &[[MaybeUninit<MicroKernel<T>>; 2]; 2],
     mr: usize,
@@ -309,14 +308,14 @@ unsafe fn direct_millikernel<T: Copy>(
 
     let mut i = 0usize;
     while i < m {
-        data.last_mask = if i + mr < m { full_mask } else { last_mask };
-        let microkernels = microkernels.get_unchecked((i + mr >= m) as usize);
+        data.last_mask = if i + mr <= m { full_mask } else { last_mask };
+        let microkernels = microkernels.get_unchecked((i + mr > m) as usize);
         let dst = dst.offset(i as isize);
 
         let mut j = 0usize;
         while j < n {
             let microkernel = microkernels
-                .get_unchecked((j + nr >= n) as usize)
+                .get_unchecked((j + nr > n) as usize)
                 .assume_init();
 
             microkernel(
@@ -379,7 +378,9 @@ impl Conj for c64 {
     }
 }
 
-unsafe fn copy_millikernel<T: Copy + One>(
+unsafe fn copy_millikernel<
+    T: Copy + PartialEq + core::ops::Add<Output = T> + core::ops::Mul<Output = T> + Conj + One,
+>(
     microkernels: &[[MaybeUninit<MicroKernel<T>>; 2]; 2],
     mr: usize,
     nr: usize,
@@ -432,57 +433,53 @@ unsafe fn copy_millikernel<T: Copy + One>(
             last_mask,
         );
     } else {
-        let mut dst_tmp: MaybeUninit<[T; 32 * 32]> = core::mem::MaybeUninit::uninit();
-        let mut lhs_tmp: MaybeUninit<[T; 32 * 32]> = core::mem::MaybeUninit::uninit();
+        // 32 is always a multiple of both MR and NR
+        const M_BS: usize = 64;
+        const N_BS: usize = 64;
+        const K_BS: usize = 64;
+        let mut dst_tmp: MaybeUninit<[T; M_BS * N_BS]> = core::mem::MaybeUninit::uninit();
+        let mut lhs_tmp: MaybeUninit<[T; M_BS * K_BS]> = core::mem::MaybeUninit::uninit();
 
-        let dst_tmp = &mut *((&mut dst_tmp) as *mut _ as *mut [[MaybeUninit<T>; 32]; 32]);
-        let lhs_tmp = &mut *((&mut lhs_tmp) as *mut _ as *mut [[MaybeUninit<T>; 32]; 32]);
+        let dst_tmp = &mut *((&mut dst_tmp) as *mut _ as *mut [[MaybeUninit<T>; M_BS]; N_BS]);
+        let lhs_tmp = &mut *((&mut lhs_tmp) as *mut _ as *mut [[MaybeUninit<T>; M_BS]; K_BS]);
 
-        let gemm_dst_cs = 32;
-        let gemm_lhs_cs = 32;
+        let gemm_dst_cs = M_BS as isize;
+        let gemm_lhs_cs = M_BS as isize;
 
         let mut depth = 0usize;
         while depth < k {
-            let depth_bs = Ord::min(32, k - depth);
+            let depth_bs = Ord::min(K_BS, k - depth);
+            let gemm_dst = dst_tmp.as_mut_ptr() as *mut T;
+            let gemm_lhs = lhs_tmp.as_ptr() as *mut T;
 
             let mut i = 0usize;
             while i < m {
-                let i_bs = Ord::min(32, m - i);
+                let i_bs = Ord::min(M_BS, m - i);
+
+                let lhs = lhs.offset(lhs_rs * i as isize + lhs_cs * depth as isize);
+
+                for ii in 0..i_bs {
+                    for jj in 0..depth_bs {
+                        let ii = ii as isize;
+                        let jj = jj as isize;
+                        *(gemm_lhs.offset(ii + gemm_lhs_cs * jj)) =
+                            *(lhs.offset(lhs_rs * ii + lhs_cs * jj));
+                    }
+                }
 
                 let mut j = 0usize;
                 while j < n {
-                    let j_bs = Ord::min(32, n - j);
-
-                    let gemm_dst = dst_tmp.as_mut_ptr() as *mut T;
-                    let gemm_lhs = lhs_tmp.as_ptr() as *mut T;
+                    let j_bs = Ord::min(N_BS, n - j);
 
                     let dst = dst.offset(dst_rs * i as isize + dst_cs * j as isize);
-                    let lhs = lhs.offset(dst_rs * i as isize + dst_cs * j as isize);
-
-                    for jj in 0..j_bs {
-                        for ii in 0..i_bs {
-                            *(gemm_dst.offset(ii as isize + gemm_dst_cs * jj as isize)
-                                as *mut MaybeUninit<T>) = *(dst
-                                .offset(dst_rs * ii as isize + dst_cs * jj as isize)
-                                as *const MaybeUninit<T>);
-                        }
-                    }
-                    for jj in 0..depth_bs {
-                        for ii in 0..i_bs {
-                            *(gemm_lhs.offset(ii as isize + gemm_lhs_cs * jj as isize)
-                                as *mut MaybeUninit<T>) = *(lhs
-                                .offset(lhs_rs * ii as isize + lhs_cs * jj as isize)
-                                as *const MaybeUninit<T>);
-                        }
-                    }
 
                     direct_millikernel(
                         microkernels,
                         mr,
                         nr,
-                        m,
-                        n,
-                        k,
+                        i_bs,
+                        j_bs,
+                        depth_bs,
                         gemm_dst,
                         1,
                         gemm_dst_cs,
@@ -492,7 +489,7 @@ unsafe fn copy_millikernel<T: Copy + One>(
                         rhs,
                         rhs_rs,
                         rhs_cs,
-                        alpha,
+                        core::mem::zeroed(),
                         beta,
                         conj_lhs,
                         conj_rhs,
@@ -500,10 +497,23 @@ unsafe fn copy_millikernel<T: Copy + One>(
                         if i + i_bs == m { last_mask } else { full_mask },
                     );
 
-                    for jj in 0..j_bs {
+                    if alpha == core::mem::zeroed() {
                         for ii in 0..i_bs {
-                            *(dst.offset(dst_rs * ii as isize + dst_cs * jj as isize)
-                                as *mut MaybeUninit<T>) = dst_tmp[jj][ii];
+                            for jj in 0..j_bs {
+                                let ii = ii as isize;
+                                let jj = jj as isize;
+                                *(dst.offset(dst_rs * ii + dst_cs * jj)) =
+                                    *(gemm_dst.offset(ii + gemm_dst_cs * jj));
+                            }
+                        }
+                    } else {
+                        for ii in 0..i_bs {
+                            for jj in 0..j_bs {
+                                let ii = ii as isize;
+                                let jj = jj as isize;
+                                let dst = dst.offset(dst_rs * ii + dst_cs * jj);
+                                *dst = alpha * *dst + *(gemm_dst.offset(ii + gemm_dst_cs * jj));
+                            }
                         }
                     }
 

@@ -2,8 +2,8 @@ use aligned_vec::avec;
 
 extern crate intel_mkl_src;
 
-const MIN: usize = 1;
-const MAX: usize = 32;
+const MIN: usize = 64;
+const MAX: usize = 64;
 
 type T = f32;
 type FaerT = f32;
@@ -13,6 +13,7 @@ const ALPHA: T = 3.7;
 
 #[divan::bench(args = 
     (MIN..=MAX).map(|size| [size, size, size])
+    .chain((MIN..=MAX).map(|size| [size, size, 16]))
     .chain((MIN..=MAX).map(|size| [4, size, 4]))
     .chain((MIN..=MAX).map(|size| [size, 4, 4]))
 )]
@@ -27,7 +28,7 @@ pub fn nanogemm(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
     let beta = BETA;
     let alpha = ALPHA;
 
-    let plan = nano_gemm::Plan::new_colmajor_lhs_and_dst_f32(m, n,  k);
+    let plan = nano_gemm::Plan::new_colmajor_lhs_and_dst_f32(m, n, k);
     let mut dst = c.clone();
 
     bencher.bench_local(|| unsafe {
@@ -58,6 +59,7 @@ pub fn nanogemm(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
 
 #[divan::bench(args = 
     (MIN..=MAX).map(|size| [size, size, size])
+    .chain((MIN..=MAX).map(|size| [size, size, 16]))
     .chain((MIN..=MAX).map(|size| [4, size, 4]))
     .chain((MIN..=MAX).map(|size| [size, 4, 4]))
 )]
@@ -73,7 +75,7 @@ pub fn nalgebra(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
 
     bencher.bench_local(|| {
         for _ in 0..1000 {
-            dst +=  &a * &b * beta
+            dst +=  &a * &b * beta;
         }
     });
 }
@@ -82,6 +84,7 @@ pub fn nalgebra(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
 
 #[divan::bench(args = 
     (MIN..=MAX).map(|size| [size, size, size])
+    .chain((MIN..=MAX).map(|size| [size, size, 16]))
     .chain((MIN..=MAX).map(|size| [4, size, 4]))
     .chain((MIN..=MAX).map(|size| [size, 4, 4]))
 )]
@@ -111,6 +114,7 @@ pub fn faer(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
 
 #[divan::bench(args = 
     (MIN..=MAX).map(|size| [size, size, size])
+    .chain((MIN..=MAX).map(|size| [size, size, 16]))
     .chain((MIN..=MAX).map(|size| [4, size, 4]))
     .chain((MIN..=MAX).map(|size| [size, 4, 4]))
 )]
@@ -128,10 +132,10 @@ pub fn ndarray(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
         c[(0, 0)] = beta;
     }
 
-    let mut dst = c.clone();
+    let dst = c.clone();
     bencher.bench_local(|| {
         for _ in 0..1000 {
-            dst = &dst + beta * a.dot(&b)
+             _ = &dst + beta * a.dot(&b);
         }
     });
 }
