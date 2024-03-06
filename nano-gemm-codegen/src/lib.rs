@@ -6,6 +6,875 @@
 use std::fmt::Display;
 use std::fmt::Write;
 
+mod generic {
+    use super::*;
+
+    pub struct RealKernel {
+        pub ty: &'static str,
+        pub reg_ty: &'static str,
+        // register size
+        pub n: usize,
+        pub mr: usize,
+        pub nr: usize,
+        pub k: Option<usize>,
+
+        pub target_features: &'static str,
+        pub load_unaligned: [&'static str; 3],
+        pub store_unaligned: [&'static str; 3],
+        pub set1: &'static str,
+        pub mul_add: &'static str,
+    }
+
+    pub struct CplxKernel {
+        pub ty: &'static str,
+        pub reg_ty: &'static str,
+        // register size
+        pub n: usize,
+        pub mr: usize,
+        pub nr: usize,
+        pub k: Option<usize>,
+
+        pub target_features: &'static str,
+        pub load_unaligned: [&'static str; 3],
+        pub store_unaligned: [&'static str; 3],
+        pub set1: &'static str,
+        pub mul_add: &'static str,
+        pub conj_mul_add: &'static str,
+        pub conj: &'static str,
+    }
+
+    impl Display for RealKernel {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let Self {
+                ty,
+                reg_ty,
+                n,
+                mr,
+                nr,
+                k,
+                target_features,
+                load_unaligned,
+                store_unaligned,
+                mul_add,
+                ..
+            } = self;
+
+            write!(f, "#[target_feature(enable = \"{target_features}\")]\n")?;
+            write!(
+                f,
+                r#"pub unsafe fn matmul_{mr}_{nr}_{}(
+                &nano_gemm_core::MicroKernelData {{ alpha, beta, k, dst_cs, lhs_cs, rhs_rs, rhs_cs, .. }}: &nano_gemm_core::MicroKernelData< {ty} >,
+                dst: *mut {ty},
+                lhs: *const {ty},
+                rhs: *const {ty},
+            ) {{
+"#,
+                k.map(|k| k.to_string()).unwrap_or("dyn".to_string()),
+            )?;
+
+            write!(f, "_ = k;\n")?;
+            let mut i = 0;
+            while i < *mr {
+                let ii = Ord::min((mr - i).ilog2() as usize, n.ilog2() as usize);
+
+                for j in 0..*nr {
+                    write!(
+                        f,
+                        "let mut acc_{i}_{j}: {} = core::mem::zeroed();\n",
+                        reg_ty
+                    )?;
+                }
+
+                i += 1 << ii;
+            }
+
+            if let Some(k) = self.k {
+                for depth in 0..k {
+                    write!(f, "let depth = {depth};\n")?;
+                    self.inner_kernel(f)?;
+                }
+            } else {
+                write!(f, "for depth in 0..k as isize {{")?;
+                self.inner_kernel(f)?;
+                write!(f, "}}")?;
+            }
+
+            write!(f, "if alpha == 1.0 {{")?;
+            write!(f, "let beta = {}(beta);\n", self.set1)?;
+            for j in 0..self.nr {
+                let mut i = 0;
+                while i < *mr {
+                    let ii = Ord::min((mr - i).ilog2() as usize, n.ilog2() as usize);
+                    write!(f, "{{")?;
+                    write!(f, "let dst = dst.offset({i} + {j} * dst_cs);")?;
+                    write!(
+                        f,
+                        "{}(dst, {mul_add}(beta, acc_{i}_{j}, {}(dst)));\n",
+                        store_unaligned[ii], load_unaligned[ii],
+                    )?;
+                    write!(f, "}}")?;
+                    i += 1 << ii;
+                }
+            }
+            write!(f, "}}")?;
+
+            write!(f, "else if alpha == 0.0 {{")?;
+            write!(f, "let beta = {}(beta);\n", self.set1)?;
+            for j in 0..self.nr {
+                let mut i = 0;
+                while i < *mr {
+                    let ii = Ord::min((mr - i).ilog2() as usize, n.ilog2() as usize);
+                    write!(f, "{{")?;
+                    write!(f, "let dst = dst.offset({i} + {j} * dst_cs);")?;
+                    write!(
+                        f,
+                        "{}(dst, {mul_add}(beta, acc_{i}_{j}, core::mem::zeroed()));\n",
+                        store_unaligned[ii],
+                    )?;
+                    write!(f, "}}")?;
+                    i += 1 << ii;
+                }
+            }
+            write!(f, "}}")?;
+
+            write!(f, "else {{")?;
+            write!(f, "let beta = {}(beta);\n", self.set1)?;
+            write!(f, "let alpha = {}(alpha);\n", self.set1)?;
+            for j in 0..self.nr {
+                let mut i = 0;
+                while i < *mr {
+                    let ii = Ord::min((mr - i).ilog2() as usize, n.ilog2() as usize);
+                    write!(f, "{{")?;
+                    write!(f, "let dst = dst.offset({i} + {j} * dst_cs);")?;
+                    write!(
+                        f,
+                        "{}(dst, {mul_add}(beta, acc_{i}_{j}, {mul_add}(alpha, {}(dst), core::mem::zeroed())));\n",
+                        store_unaligned[ii], load_unaligned[ii],
+                    )?;
+                    write!(f, "}}")?;
+                    i += 1 << ii;
+                }
+            }
+            write!(f, "}}")?;
+
+            write!(f, "}}")
+        }
+    }
+
+    impl RealKernel {
+        fn inner_kernel(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+            let Self {
+                mr,
+                set1,
+                mul_add,
+                load_unaligned,
+                n,
+                ..
+            } = self;
+
+            let mut i = 0;
+            while i < *mr {
+                let ii = Ord::min((mr - i).ilog2() as usize, n.ilog2() as usize);
+                write!(
+                    f,
+                    "let tmp_lhs_{i} = {}(lhs.offset(depth * lhs_cs + {i}));",
+                    load_unaligned[ii],
+                )?;
+                i += 1 << ii;
+            }
+            for j in 0..self.nr {
+                write!(
+                    f,
+                    "let tmp_rhs = {set1}(*rhs.offset(depth * rhs_rs + {j} * rhs_cs));\n",
+                )?;
+
+                let mut i = 0;
+                while i < *mr {
+                    let ii = Ord::min((mr - i).ilog2() as usize, n.ilog2() as usize);
+                    write!(
+                        f,
+                        "acc_{i}_{j} = {mul_add}(tmp_lhs_{i}, tmp_rhs, acc_{i}_{j});\n",
+                    )?;
+                    i += 1 << ii;
+                }
+            }
+
+            Ok(())
+        }
+    }
+
+    impl Display for CplxKernel {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let Self {
+                ty,
+                reg_ty,
+                n,
+                mr,
+                nr,
+                k,
+                target_features,
+                load_unaligned,
+                store_unaligned,
+                mul_add,
+                conj,
+                ..
+            } = self;
+
+            write!(f, "#[target_feature(enable = \"{target_features}\")]\n")?;
+            write!(
+                f,
+                r#"pub unsafe fn matmul_{mr}_{nr}_{}(
+                &nano_gemm_core::MicroKernelData {{ alpha, beta, k, dst_cs, lhs_cs, rhs_rs, rhs_cs, conj_lhs, conj_rhs, .. }}: &nano_gemm_core::MicroKernelData< {ty} >,
+                dst: *mut {ty},
+                lhs: *const {ty},
+                rhs: *const {ty},
+            ) {{
+"#,
+                k.map(|k| k.to_string()).unwrap_or("dyn".to_string()),
+            )?;
+
+            write!(f, "_ = k;\n")?;
+            let mut i = 0;
+            while i < *mr {
+                let ii = Ord::min((mr - i).ilog2() as usize, n.ilog2() as usize);
+
+                for j in 0..*nr {
+                    write!(
+                        f,
+                        "let mut acc_{i}_{j}: {} = core::mem::zeroed();\n",
+                        reg_ty
+                    )?;
+                }
+
+                i += 1 << ii;
+            }
+
+            write!(f, "if conj_lhs == conj_rhs {{")?;
+            if let Some(k) = self.k {
+                for depth in 0..k {
+                    write!(f, "let depth = {depth};\n")?;
+                    self.inner_kernel_no_conj(f)?;
+                }
+            } else {
+                write!(f, "for depth in 0..k as isize {{")?;
+                self.inner_kernel_no_conj(f)?;
+                write!(f, "}}")?;
+            }
+            write!(f, "}} else {{")?;
+            if let Some(k) = self.k {
+                for depth in 0..k {
+                    write!(f, "let depth = {depth};\n")?;
+                    self.inner_kernel_conj(f)?;
+                }
+            } else {
+                write!(f, "for depth in 0..k as isize {{")?;
+                self.inner_kernel_conj(f)?;
+                write!(f, "}}")?;
+            }
+            write!(f, "}}")?;
+
+            write!(f, "if conj_rhs {{")?;
+            for j in 0..self.nr {
+                let mut i = 0;
+                while i < *mr {
+                    let ii = Ord::min((mr - i).ilog2() as usize, n.ilog2() as usize);
+                    write!(f, "acc_{i}_{j} = {conj}(acc_{i}_{j});")?;
+                    i += 1 << ii;
+                }
+            }
+            write!(f, "}}")?;
+
+            write!(f, "if alpha == ({ty} {{ re: 1.0, im: 0.0 }}) {{")?;
+            write!(f, "let beta = {}(beta);\n", self.set1)?;
+            for j in 0..self.nr {
+                let mut i = 0;
+                while i < *mr {
+                    let ii = Ord::min((mr - i).ilog2() as usize, n.ilog2() as usize);
+                    write!(f, "{{")?;
+                    write!(f, "let dst = dst.offset({i} + {j} * dst_cs);")?;
+                    write!(
+                        f,
+                        "{}(dst, {mul_add}(beta, acc_{i}_{j}, {}(dst)));\n",
+                        store_unaligned[ii], load_unaligned[ii],
+                    )?;
+                    write!(f, "}}")?;
+                    i += 1 << ii;
+                }
+            }
+            write!(f, "}}")?;
+
+            write!(f, "else if alpha == ({ty} {{ re: 0.0, im: 0.0 }}) {{")?;
+            write!(f, "let beta = {}(beta);\n", self.set1)?;
+            for j in 0..self.nr {
+                let mut i = 0;
+                while i < *mr {
+                    let ii = Ord::min((mr - i).ilog2() as usize, n.ilog2() as usize);
+                    write!(f, "{{")?;
+                    write!(f, "let dst = dst.offset({i} + {j} * dst_cs);")?;
+                    write!(
+                        f,
+                        "{}(dst, {mul_add}(beta, acc_{i}_{j}, core::mem::zeroed()));\n",
+                        store_unaligned[ii],
+                    )?;
+                    write!(f, "}}")?;
+                    i += 1 << ii;
+                }
+            }
+            write!(f, "}}")?;
+
+            write!(f, "else {{")?;
+            write!(f, "let beta = {}(beta);\n", self.set1)?;
+            write!(f, "let alpha = {}(alpha);\n", self.set1)?;
+            for j in 0..self.nr {
+                let mut i = 0;
+                while i < *mr {
+                    let ii = Ord::min((mr - i).ilog2() as usize, n.ilog2() as usize);
+                    write!(f, "{{")?;
+                    write!(f, "let dst = dst.offset({i} + {j} * dst_cs);")?;
+                    write!(
+                        f,
+                        "{}(dst, {mul_add}(beta, acc_{i}_{j}, {mul_add}(alpha, {}(dst), core::mem::zeroed())));\n",
+                        store_unaligned[ii], load_unaligned[ii],
+                    )?;
+                    write!(f, "}}")?;
+                    i += 1 << ii;
+                }
+            }
+            write!(f, "}}")?;
+
+            write!(f, "}}")
+        }
+    }
+
+    impl CplxKernel {
+        fn inner_kernel_no_conj(
+            &self,
+            f: &mut std::fmt::Formatter<'_>,
+        ) -> Result<(), std::fmt::Error> {
+            let Self {
+                mr,
+                set1,
+                mul_add,
+                load_unaligned,
+                n,
+                ..
+            } = self;
+
+            let mut i = 0;
+            while i < *mr {
+                let ii = Ord::min((mr - i).ilog2() as usize, n.ilog2() as usize);
+                write!(
+                    f,
+                    "let tmp_lhs_{i} = {}(lhs.offset(depth * lhs_cs + {i}));",
+                    load_unaligned[ii],
+                )?;
+                i += 1 << ii;
+            }
+            for j in 0..self.nr {
+                write!(
+                    f,
+                    "let tmp_rhs = {set1}(*rhs.offset(depth * rhs_rs + {j} * rhs_cs));\n",
+                )?;
+
+                let mut i = 0;
+                while i < *mr {
+                    let ii = Ord::min((mr - i).ilog2() as usize, n.ilog2() as usize);
+                    write!(
+                        f,
+                        "acc_{i}_{j} = {mul_add}(tmp_lhs_{i}, tmp_rhs, acc_{i}_{j});\n",
+                    )?;
+                    i += 1 << ii;
+                }
+            }
+
+            Ok(())
+        }
+
+        fn inner_kernel_conj(
+            &self,
+            f: &mut std::fmt::Formatter<'_>,
+        ) -> Result<(), std::fmt::Error> {
+            let Self {
+                mr,
+                set1,
+                conj_mul_add,
+                load_unaligned,
+                n,
+                ..
+            } = self;
+
+            let mut i = 0;
+            while i < *mr {
+                let ii = Ord::min((mr - i).ilog2() as usize, n.ilog2() as usize);
+                write!(
+                    f,
+                    "let tmp_lhs_{i} = {}(lhs.offset(depth * lhs_cs + {i}));",
+                    load_unaligned[ii],
+                )?;
+                i += 1 << ii;
+            }
+            for j in 0..self.nr {
+                write!(
+                    f,
+                    "let tmp_rhs = {set1}(*rhs.offset(depth * rhs_rs + {j} * rhs_cs));\n",
+                )?;
+
+                let mut i = 0;
+                while i < *mr {
+                    let ii = Ord::min((mr - i).ilog2() as usize, n.ilog2() as usize);
+                    write!(
+                        f,
+                        "acc_{i}_{j} = {conj_mul_add}(tmp_lhs_{i}, tmp_rhs, acc_{i}_{j});\n",
+                    )?;
+                    i += 1 << ii;
+                }
+            }
+
+            Ok(())
+        }
+    }
+}
+
+pub mod aarch64 {
+    use super::*;
+    use generic::{CplxKernel, RealKernel};
+
+    pub fn codegen_f32() -> Result<String, Box<dyn std::error::Error>> {
+        let mut code = String::new();
+
+        write!(code, "pub mod f32 {{\n")?;
+        write!(code, "pub mod neon {{\n")?;
+        write!(
+            code,
+            r###"
+            use core::arch::aarch64::*;
+            use core::mem::transmute;
+            use core::mem::transmute_copy;
+
+            #[inline(always)]
+            unsafe fn set1(v: f32) -> float32x4_t {{
+                transmute([v; 4])
+            }}
+            #[inline(always)]
+            unsafe fn mul_add(a: float32x4_t, b: float32x4_t, c: float32x4_t) -> float32x4_t {{
+                vmlaq_f32(c, a, b)
+            }}
+            #[inline(always)]
+            unsafe fn load_1(ptr: *const f32) -> float32x4_t {{
+                transmute([*ptr; 4])
+            }}
+            #[inline(always)]
+            unsafe fn load_2(ptr: *const f32) -> float32x4_t {{
+                transmute([*(ptr as *const [f32; 2]); 2])
+            }}
+            #[inline(always)]
+            unsafe fn load_4(ptr: *const f32) -> float32x4_t {{
+                transmute(*(ptr as *const [f32; 4]))
+            }}
+
+            #[inline(always)]
+            unsafe fn store_1(ptr: *mut f32, v: float32x4_t) {{
+                *(ptr as *mut [f32; 1]) = transmute_copy(&v);
+            }}
+            #[inline(always)]
+            unsafe fn store_2(ptr: *mut f32, v: float32x4_t) {{
+                *(ptr as *mut [f32; 2]) = transmute_copy(&v);
+            }}
+            #[inline(always)]
+            unsafe fn store_4(ptr: *mut f32, v: float32x4_t) {{
+                *(ptr as *mut [f32; 4]) = transmute_copy(&v);
+            }}
+            "###
+        )?;
+        for mr in 1..=8 {
+            for nr in 1..=4 {
+                for k in (1..=16).into_iter().map(Some).chain([None]) {
+                    let kernel = RealKernel {
+                        ty: "f32",
+                        reg_ty: "float32x4_t",
+                        n: 4,
+                        mr,
+                        nr,
+                        k,
+                        target_features: "neon",
+                        load_unaligned: ["load_1", "load_2", "load_4"],
+                        store_unaligned: ["store_1", "store_2", "store_4"],
+                        set1: "set1",
+                        mul_add: "mul_add",
+                    };
+                    write!(code, "{kernel}")?;
+                }
+            }
+        }
+
+        write!(
+            code,
+            "pub static MICROKERNELS: [[[nano_gemm_core::MicroKernel<f32>; 4]; 8]; 17] = [\n"
+        )?;
+        for k in (1..=16).into_iter().map(Some).chain([None]) {
+            write!(code, "[\n")?;
+            for mr in 1..=8 {
+                write!(code, "[\n")?;
+                for nr in 1..=4 {
+                    write!(
+                        code,
+                        "matmul_{mr}_{nr}_{},",
+                        k.map(|k| k.to_string()).unwrap_or("dyn".to_string()),
+                    )?;
+                }
+                write!(code, "],\n")?;
+            }
+            write!(code, "],\n")?;
+        }
+        write!(code, "];\n")?;
+        write!(code, "}}")?;
+        write!(code, "}}")?;
+
+        Ok(code)
+    }
+
+    pub fn codegen_f64() -> Result<String, Box<dyn std::error::Error>> {
+        let mut code = String::new();
+
+        write!(code, "pub mod f64 {{\n")?;
+        write!(code, "pub mod neon {{\n")?;
+        write!(
+            code,
+            r###"
+            use core::arch::aarch64::*;
+            use core::mem::transmute;
+            use core::mem::transmute_copy;
+
+            #[inline(always)]
+            unsafe fn set1(v: f64) -> float64x2_t {{
+                transmute([v; 2])
+            }}
+            #[inline(always)]
+            unsafe fn mul_add(a: float64x2_t, b: float64x2_t, c: float64x2_t) -> float64x2_t {{
+                vmlaq_f64(c, a, b)
+            }}
+            #[inline(always)]
+            unsafe fn load_1(ptr: *const f64) -> float64x2_t {{
+                transmute([*ptr; 2])
+            }}
+            #[inline(always)]
+            unsafe fn load_2(ptr: *const f64) -> float64x2_t {{
+                transmute(*(ptr as *const [f64; 2]))
+            }}
+
+            #[inline(always)]
+            unsafe fn store_1(ptr: *mut f64, v: float64x2_t) {{
+                *(ptr as *mut [f64; 1]) = transmute_copy(&v);
+            }}
+            #[inline(always)]
+            unsafe fn store_2(ptr: *mut f64, v: float64x2_t) {{
+                *(ptr as *mut [f64; 2]) = transmute_copy(&v);
+            }}
+            "###
+        )?;
+        for mr in 1..=4 {
+            for nr in 1..=4 {
+                for k in (1..=16).into_iter().map(Some).chain([None]) {
+                    let kernel = RealKernel {
+                        ty: "f64",
+                        reg_ty: "float64x2_t",
+                        n: 2,
+                        mr,
+                        nr,
+                        k,
+                        target_features: "neon",
+                        load_unaligned: ["load_1", "load_2", "load_4"],
+                        store_unaligned: ["store_1", "store_2", "store_4"],
+                        set1: "set1",
+                        mul_add: "mul_add",
+                    };
+                    write!(code, "{kernel}")?;
+                }
+            }
+        }
+
+        write!(
+            code,
+            "pub static MICROKERNELS: [[[nano_gemm_core::MicroKernel<f64>; 4]; 4]; 17] = [\n"
+        )?;
+        for k in (1..=16).into_iter().map(Some).chain([None]) {
+            write!(code, "[\n")?;
+            for mr in 1..=4 {
+                write!(code, "[\n")?;
+                for nr in 1..=4 {
+                    write!(
+                        code,
+                        "matmul_{mr}_{nr}_{},",
+                        k.map(|k| k.to_string()).unwrap_or("dyn".to_string()),
+                    )?;
+                }
+                write!(code, "],\n")?;
+            }
+            write!(code, "],\n")?;
+        }
+        write!(code, "];\n")?;
+        write!(code, "}}")?;
+        write!(code, "}}")?;
+
+        Ok(code)
+    }
+
+    pub fn codegen_c32() -> Result<String, Box<dyn std::error::Error>> {
+        let mut code = String::new();
+
+        write!(code, "pub mod c32 {{\n")?;
+        write!(code, "pub mod neon {{ use crate::c32;\n")?;
+        write!(
+            code,
+            r###"
+            use core::arch::aarch64::*;
+            use core::mem::transmute;
+            use core::mem::transmute_copy;
+
+            #[inline(always)]
+            unsafe fn set1(v: c32) -> float32x4_t {{
+                transmute([v; 2])
+            }}
+            #[inline(always)]
+            unsafe fn mul_add(a: float32x4_t, b: float32x4_t, c: float32x4_t) -> float32x4_t {{
+                vcmlaq_90_f32(vcmlaq_0_f32(c, a, b), a, b)
+            }}
+            #[inline(always)]
+            unsafe fn conj_mul_add(a: float32x4_t, b: float32x4_t, c: float32x4_t) -> float32x4_t {{
+                vcmlaq_270_f32(vcmlaq_0_f32(c, a, b), a, b)
+            }}
+            #[inline(always)]
+            unsafe fn conj(a: float32x4_t) -> float32x4_t {{
+                transmute(veorq_u32(transmute(a), transmute([0.0, -0.0, 0.0, -0.0f32])))
+            }}
+            #[inline(always)]
+            unsafe fn load_1(ptr: *const c32) -> float32x4_t {{
+                transmute([*ptr; 2])
+            }}
+            #[inline(always)]
+            unsafe fn load_2(ptr: *const c32) -> float32x4_t {{
+                transmute(*(ptr as *const [c32; 2]))
+            }}
+
+            #[inline(always)]
+            unsafe fn store_1(ptr: *mut c32, v: float32x4_t) {{
+                *(ptr as *mut [c32; 1]) = transmute_copy(&v);
+            }}
+            #[inline(always)]
+            unsafe fn store_2(ptr: *mut c32, v: float32x4_t) {{
+                *(ptr as *mut [c32; 2]) = transmute_copy(&v);
+            }}
+
+#[inline]
+#[target_feature(enable = "neon,fcma")]
+unsafe fn vcmlaq_0_f32(mut acc: float32x4_t, lhs: float32x4_t, rhs: float32x4_t) -> float32x4_t {{
+    core::arch::asm!(
+        "fcmla {{0:v}}.4s, {{1:v}}.4s, {{2:v}}.4s, 0",
+        inout(vreg) acc,
+        in(vreg) lhs,
+        in(vreg) rhs,
+        options(pure, nomem, nostack));
+    acc
+}}
+
+#[inline]
+#[target_feature(enable = "neon,fcma")]
+unsafe fn vcmlaq_90_f32(mut acc: float32x4_t, lhs: float32x4_t, rhs: float32x4_t) -> float32x4_t {{
+    core::arch::asm!(
+        "fcmla {{0:v}}.4s, {{1:v}}.4s, {{2:v}}.4s, 90",
+        inout(vreg) acc,
+        in(vreg) lhs,
+        in(vreg) rhs,
+        options(pure, nomem, nostack));
+    acc
+}}
+
+#[inline]
+#[target_feature(enable = "neon,fcma")]
+unsafe fn vcmlaq_270_f32(mut acc: float32x4_t, lhs: float32x4_t, rhs: float32x4_t) -> float32x4_t {{
+    core::arch::asm!(
+        "fcmla {{0:v}}.4s, {{1:v}}.4s, {{2:v}}.4s, 270",
+        inout(vreg) acc,
+        in(vreg) lhs,
+        in(vreg) rhs,
+        options(pure, nomem, nostack));
+    acc
+}}
+            "###
+        )?;
+        for mr in 1..=4 {
+            for nr in 1..=4 {
+                for k in (1..=16).into_iter().map(Some).chain([None]) {
+                    let kernel = CplxKernel {
+                        ty: "c32",
+                        reg_ty: "float32x4_t",
+                        n: 2,
+                        mr,
+                        nr,
+                        k,
+                        target_features: "neon,fcma",
+                        load_unaligned: ["load_1", "load_2", "load_4"],
+                        store_unaligned: ["store_1", "store_2", "store_4"],
+                        set1: "set1",
+                        mul_add: "mul_add",
+                        conj_mul_add: "conj_mul_add",
+                        conj: "conj",
+                    };
+                    write!(code, "{kernel}")?;
+                }
+            }
+        }
+
+        write!(
+            code,
+            "pub static MICROKERNELS: [[[nano_gemm_core::MicroKernel<c32>; 4]; 4]; 17] = [\n"
+        )?;
+        for k in (1..=16).into_iter().map(Some).chain([None]) {
+            write!(code, "[\n")?;
+            for mr in 1..=4 {
+                write!(code, "[\n")?;
+                for nr in 1..=4 {
+                    write!(
+                        code,
+                        "matmul_{mr}_{nr}_{},",
+                        k.map(|k| k.to_string()).unwrap_or("dyn".to_string()),
+                    )?;
+                }
+                write!(code, "],\n")?;
+            }
+            write!(code, "],\n")?;
+        }
+        write!(code, "];\n")?;
+        write!(code, "}}")?;
+        write!(code, "}}")?;
+
+        Ok(code)
+    }
+
+    pub fn codegen_c64() -> Result<String, Box<dyn std::error::Error>> {
+        let mut code = String::new();
+
+        write!(code, "pub mod c64 {{\n")?;
+        write!(code, "pub mod neon {{ use crate::c64;\n")?;
+        write!(
+            code,
+            r###"
+            use core::arch::aarch64::*;
+            use core::mem::transmute;
+
+            #[inline(always)]
+            unsafe fn set1(v: c64) -> float64x2_t {{
+                transmute(v)
+            }}
+            #[inline(always)]
+            unsafe fn mul_add(a: float64x2_t, b: float64x2_t, c: float64x2_t) -> float64x2_t {{
+                vcmlaq_90_f64(vcmlaq_0_f64(c, a, b), a, b)
+            }}
+            #[inline(always)]
+            unsafe fn conj_mul_add(a: float64x2_t, b: float64x2_t, c: float64x2_t) -> float64x2_t {{
+                vcmlaq_270_f64(vcmlaq_0_f64(c, a, b), a, b)
+            }}
+            #[inline(always)]
+            unsafe fn conj(a: float64x2_t) -> float64x2_t {{
+                transmute(veorq_u64(transmute(a), transmute([0.0, -0.0f64])))
+            }}
+            #[inline(always)]
+            unsafe fn load_1(ptr: *const c64) -> float64x2_t {{
+                transmute(*ptr)
+            }}
+
+            #[inline(always)]
+            unsafe fn store_1(ptr: *mut c64, v: float64x2_t) {{
+                *ptr = transmute(v);
+            }}
+
+#[inline]
+#[target_feature(enable = "neon,fcma")]
+unsafe fn vcmlaq_0_f64(mut acc: float64x2_t, lhs: float64x2_t, rhs: float64x2_t) -> float64x2_t {{
+    core::arch::asm!(
+        "fcmla {{0:v}}.2d, {{1:v}}.2d, {{2:v}}.2d, 0",
+        inout(vreg) acc,
+        in(vreg) lhs,
+        in(vreg) rhs,
+        options(pure, nomem, nostack));
+    acc
+}}
+
+#[inline]
+#[target_feature(enable = "neon,fcma")]
+unsafe fn vcmlaq_90_f64(mut acc: float64x2_t, lhs: float64x2_t, rhs: float64x2_t) -> float64x2_t {{
+    core::arch::asm!(
+        "fcmla {{0:v}}.2d, {{1:v}}.2d, {{2:v}}.2d, 90",
+        inout(vreg) acc,
+        in(vreg) lhs,
+        in(vreg) rhs,
+        options(pure, nomem, nostack));
+    acc
+}}
+
+#[inline]
+#[target_feature(enable = "neon,fcma")]
+unsafe fn vcmlaq_270_f64(mut acc: float64x2_t, lhs: float64x2_t, rhs: float64x2_t) -> float64x2_t {{
+    core::arch::asm!(
+        "fcmla {{0:v}}.2d, {{1:v}}.2d, {{2:v}}.2d, 270",
+        inout(vreg) acc,
+        in(vreg) lhs,
+        in(vreg) rhs,
+        options(pure, nomem, nostack));
+    acc
+}}
+            "###
+        )?;
+        for mr in 1..=2 {
+            for nr in 1..=4 {
+                for k in (1..=16).into_iter().map(Some).chain([None]) {
+                    let kernel = CplxKernel {
+                        ty: "c64",
+                        reg_ty: "float64x2_t",
+                        n: 1,
+                        mr,
+                        nr,
+                        k,
+                        target_features: "neon,fcma",
+                        load_unaligned: ["load_1", "load_2", "load_4"],
+                        store_unaligned: ["store_1", "store_2", "store_4"],
+                        set1: "set1",
+                        mul_add: "mul_add",
+                        conj_mul_add: "conj_mul_add",
+                        conj: "conj",
+                    };
+                    write!(code, "{kernel}")?;
+                }
+            }
+        }
+
+        write!(
+            code,
+            "pub static MICROKERNELS: [[[nano_gemm_core::MicroKernel<c64>; 4]; 2]; 17] = [\n"
+        )?;
+        for k in (1..=16).into_iter().map(Some).chain([None]) {
+            write!(code, "[\n")?;
+            for mr in 1..=2 {
+                write!(code, "[\n")?;
+                for nr in 1..=4 {
+                    write!(
+                        code,
+                        "matmul_{mr}_{nr}_{},",
+                        k.map(|k| k.to_string()).unwrap_or("dyn".to_string()),
+                    )?;
+                }
+                write!(code, "],\n")?;
+            }
+            write!(code, "],\n")?;
+        }
+        write!(code, "];\n")?;
+        write!(code, "}}")?;
+        write!(code, "}}")?;
+
+        Ok(code)
+    }
+}
+
 pub mod x86 {
     use super::*;
 

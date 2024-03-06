@@ -45,6 +45,15 @@ unsafe fn store_2s(ptr: *mut f32, v: __m128) {
     code.push_str(&nano_gemm_codegen::x86::codegen_c32()?);
     code.push_str("}");
 
+    code.push_str(
+        r#"
+        #[cfg(target_arch = "aarch64")]
+        pub mod aarch64 {
+    "#,
+    );
+    code.push_str(&nano_gemm_codegen::aarch64::codegen_c32()?);
+    code.push_str("}");
+
     std::fs::write(&dest_path, format!("{code}")).unwrap();
     println!("cargo:rerun-if-changed=build.rs");
     Ok(())

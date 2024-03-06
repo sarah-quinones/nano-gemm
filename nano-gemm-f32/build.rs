@@ -33,6 +33,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     code.push_str(&nano_gemm_codegen::x86::codegen_f32()?);
     code.push_str("}");
 
+    code.push_str(
+        r#"
+        #[cfg(target_arch = "aarch64")]
+        pub mod aarch64 {
+    "#,
+    );
+    code.push_str(&nano_gemm_codegen::aarch64::codegen_f32()?);
+    code.push_str("}");
+
     std::fs::write(&dest_path, format!("{code}")).unwrap();
     println!("cargo:rerun-if-changed=build.rs");
     Ok(())

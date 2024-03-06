@@ -1,8 +1,6 @@
 use aligned_vec::avec;
 
-extern crate intel_mkl_src;
-
-const MIN: usize = 64;
+const MIN: usize = 1;
 const MAX: usize = 64;
 
 type T = f32;
@@ -13,7 +11,7 @@ const ALPHA: T = 3.7;
 
 #[divan::bench(args = 
     (MIN..=MAX).map(|size| [size, size, size])
-    .chain((MIN..=MAX).map(|size| [size, size, 16]))
+    .chain((MIN..=MAX).map(|size| [size, size, 4]))
     .chain((MIN..=MAX).map(|size| [4, size, 4]))
     .chain((MIN..=MAX).map(|size| [size, 4, 4]))
 )]
@@ -59,7 +57,7 @@ pub fn nanogemm(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
 
 #[divan::bench(args = 
     (MIN..=MAX).map(|size| [size, size, size])
-    .chain((MIN..=MAX).map(|size| [size, size, 16]))
+    .chain((MIN..=MAX).map(|size| [size, size, 4]))
     .chain((MIN..=MAX).map(|size| [4, size, 4]))
     .chain((MIN..=MAX).map(|size| [size, 4, 4]))
 )]
@@ -84,7 +82,7 @@ pub fn nalgebra(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
 
 #[divan::bench(args = 
     (MIN..=MAX).map(|size| [size, size, size])
-    .chain((MIN..=MAX).map(|size| [size, size, 16]))
+    .chain((MIN..=MAX).map(|size| [size, size, 4]))
     .chain((MIN..=MAX).map(|size| [4, size, 4]))
     .chain((MIN..=MAX).map(|size| [size, 4, 4]))
 )]
@@ -112,9 +110,13 @@ pub fn faer(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
     });
 }
 
+#[cfg(target_arch = "x86_64")]
+extern crate intel_mkl_src;
+
+#[cfg(target_arch = "x86_64")]
 #[divan::bench(args = 
     (MIN..=MAX).map(|size| [size, size, size])
-    .chain((MIN..=MAX).map(|size| [size, size, 16]))
+    .chain((MIN..=MAX).map(|size| [size, size, 4]))
     .chain((MIN..=MAX).map(|size| [4, size, 4]))
     .chain((MIN..=MAX).map(|size| [size, 4, 4]))
 )]
