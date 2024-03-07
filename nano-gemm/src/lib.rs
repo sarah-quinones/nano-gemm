@@ -450,14 +450,18 @@ unsafe fn copy_millikernel<
         let dst_tmp = &mut *((&mut dst_tmp) as *mut _ as *mut [[MaybeUninit<T>; M_BS]; N_BS]);
         let lhs_tmp = &mut *((&mut lhs_tmp) as *mut _ as *mut [[MaybeUninit<T>; M_BS]; K_BS]);
 
-        let gemm_dst_cs = M_BS as isize;
+        let gemm_dst = if dst_rs == 1 {
+            dst
+        } else {
+            dst_tmp.as_mut_ptr() as *mut T
+        };
+        let gemm_lhs = lhs_tmp.as_mut_ptr() as *mut T;
+        let gemm_dst_cs = if dst_rs == 1 { dst_cs } else { M_BS as isize };
         let gemm_lhs_cs = M_BS as isize;
 
         let mut depth = 0usize;
         while depth < k {
             let depth_bs = Ord::min(K_BS, k - depth);
-            let gemm_dst = dst_tmp.as_mut_ptr() as *mut T;
-            let gemm_lhs = lhs_tmp.as_mut_ptr() as *mut T;
 
             let mut i = 0usize;
             while i < m {
@@ -496,7 +500,11 @@ unsafe fn copy_millikernel<
                         rhs,
                         rhs_rs,
                         rhs_cs,
-                        core::mem::zeroed(),
+                        if dst_rs == 1 {
+                            alpha
+                        } else {
+                            core::mem::zeroed()
+                        },
                         beta,
                         conj_lhs,
                         conj_rhs,
@@ -504,22 +512,24 @@ unsafe fn copy_millikernel<
                         if i + i_bs == m { last_mask } else { full_mask },
                     );
 
-                    if alpha == core::mem::zeroed() {
-                        for ii in 0..i_bs {
-                            for jj in 0..j_bs {
-                                let ii = ii as isize;
-                                let jj = jj as isize;
-                                *(dst.offset(dst_rs * ii + dst_cs * jj)) =
-                                    *(gemm_dst.offset(ii + gemm_dst_cs * jj));
+                    if dst_rs != 1 {
+                        if alpha == core::mem::zeroed() {
+                            for ii in 0..i_bs {
+                                for jj in 0..j_bs {
+                                    let ii = ii as isize;
+                                    let jj = jj as isize;
+                                    *(dst.offset(dst_rs * ii + dst_cs * jj)) =
+                                        *(gemm_dst.offset(ii + gemm_dst_cs * jj));
+                                }
                             }
-                        }
-                    } else {
-                        for ii in 0..i_bs {
-                            for jj in 0..j_bs {
-                                let ii = ii as isize;
-                                let jj = jj as isize;
-                                let dst = dst.offset(dst_rs * ii + dst_cs * jj);
-                                *dst = alpha * *dst + *(gemm_dst.offset(ii + gemm_dst_cs * jj));
+                        } else {
+                            for ii in 0..i_bs {
+                                for jj in 0..j_bs {
+                                    let ii = ii as isize;
+                                    let jj = jj as isize;
+                                    let dst = dst.offset(dst_rs * ii + dst_cs * jj);
+                                    *dst = alpha * *dst + *(gemm_dst.offset(ii + gemm_dst_cs * jj));
+                                }
                             }
                         }
                     }
@@ -841,10 +851,7 @@ impl Plan<f32> {
                 return Self::new_f32_avx512(m, n, k, is_col_major);
             }
 
-            if std::is_x86_feature_detected!("avx")
-                && std::is_x86_feature_detected!("avx2")
-                && std::is_x86_feature_detected!("fma")
-            {
+            if std::is_x86_feature_detected!("avx2") {
                 if m == 1 {
                     return Self::new_f32x1(m, n, k, is_col_major);
                 }
@@ -895,10 +902,7 @@ impl Plan<f64> {
                 return Self::new_f64_avx512(m, n, k, is_col_major);
             }
 
-            if std::is_x86_feature_detected!("avx")
-                && std::is_x86_feature_detected!("avx2")
-                && std::is_x86_feature_detected!("fma")
-            {
+            if std::is_x86_feature_detected!("avx2") {
                 if m == 1 {
                     return Self::new_f64x1(m, n, k, is_col_major);
                 }
@@ -947,10 +951,7 @@ impl Plan<c32> {
                 return Self::new_c32_avx512(m, n, k, is_col_major);
             }
 
-            if std::is_x86_feature_detected!("avx")
-                && std::is_x86_feature_detected!("avx2")
-                && std::is_x86_feature_detected!("fma")
-            {
+            if std::is_x86_feature_detected!("avx2") {
                 if m == 1 {
                     return Self::new_c32x1(m, n, k, is_col_major);
                 }
@@ -1001,10 +1002,7 @@ impl Plan<c64> {
                 return Self::new_c64_avx512(m, n, k, is_col_major);
             }
 
-            if std::is_x86_feature_detected!("avx")
-                && std::is_x86_feature_detected!("avx2")
-                && std::is_x86_feature_detected!("fma")
-            {
+            if std::is_x86_feature_detected!("avx2") {
                 if m == 1 {
                     return Self::new_c64x1(m, n, k, is_col_major);
                 }
@@ -1180,6 +1178,190 @@ mod x86_api {
     }
 }
 
+pub mod planless {
+    use super::*;
+
+    #[inline(always)]
+    pub unsafe fn execute_f32(
+        mut m: usize,
+        mut n: usize,
+        k: usize,
+        mut dst: *mut f32,
+        mut dst_rs: isize,
+        mut dst_cs: isize,
+        mut lhs: *const f32,
+        mut lhs_rs: isize,
+        mut lhs_cs: isize,
+        mut rhs: *const f32,
+        mut rhs_rs: isize,
+        mut rhs_cs: isize,
+        alpha: f32,
+        beta: f32,
+        mut conj_lhs: bool,
+        mut conj_rhs: bool,
+    ) {
+        if dst_cs.unsigned_abs() < dst_rs.unsigned_abs() {
+            core::mem::swap(&mut m, &mut n);
+            core::mem::swap(&mut dst_rs, &mut dst_cs);
+            core::mem::swap(&mut lhs, &mut rhs);
+            core::mem::swap(&mut lhs_rs, &mut rhs_cs);
+            core::mem::swap(&mut lhs_cs, &mut rhs_rs);
+            core::mem::swap(&mut conj_lhs, &mut conj_rhs);
+        }
+        if dst_rs == -1 && m > 0 {
+            dst = dst.wrapping_offset((m - 1) as isize * dst_rs);
+            dst_rs = dst_rs.wrapping_neg();
+            lhs = lhs.wrapping_offset((m - 1) as isize * lhs_rs);
+            lhs_rs = lhs_rs.wrapping_neg();
+        }
+
+        let plan = if lhs_rs == 1 {
+            Plan::new_colmajor_lhs_and_dst_f32(m, n, k)
+        } else {
+            Plan::new_f32(m, n, k)
+        };
+        plan.execute_unchecked(
+            m, n, k, dst, dst_rs, dst_cs, lhs, lhs_rs, lhs_cs, rhs, rhs_rs, rhs_cs, alpha, beta,
+            conj_lhs, conj_rhs,
+        )
+    }
+
+    #[inline(always)]
+    pub unsafe fn execute_c32(
+        mut m: usize,
+        mut n: usize,
+        k: usize,
+        mut dst: *mut c32,
+        mut dst_rs: isize,
+        mut dst_cs: isize,
+        mut lhs: *const c32,
+        mut lhs_rs: isize,
+        mut lhs_cs: isize,
+        mut rhs: *const c32,
+        mut rhs_rs: isize,
+        mut rhs_cs: isize,
+        alpha: c32,
+        beta: c32,
+        mut conj_lhs: bool,
+        mut conj_rhs: bool,
+    ) {
+        if dst_cs.unsigned_abs() < dst_rs.unsigned_abs() {
+            core::mem::swap(&mut m, &mut n);
+            core::mem::swap(&mut dst_rs, &mut dst_cs);
+            core::mem::swap(&mut lhs, &mut rhs);
+            core::mem::swap(&mut lhs_rs, &mut rhs_cs);
+            core::mem::swap(&mut lhs_cs, &mut rhs_rs);
+            core::mem::swap(&mut conj_lhs, &mut conj_rhs);
+        }
+        if dst_rs == -1 && m > 0 {
+            dst = dst.wrapping_offset((m - 1) as isize * dst_rs);
+            dst_rs = dst_rs.wrapping_neg();
+            lhs = lhs.wrapping_offset((m - 1) as isize * lhs_rs);
+            lhs_rs = lhs_rs.wrapping_neg();
+        }
+
+        let plan = if lhs_rs == 1 {
+            Plan::new_colmajor_lhs_and_dst_c32(m, n, k)
+        } else {
+            Plan::new_c32(m, n, k)
+        };
+        plan.execute_unchecked(
+            m, n, k, dst, dst_rs, dst_cs, lhs, lhs_rs, lhs_cs, rhs, rhs_rs, rhs_cs, alpha, beta,
+            conj_lhs, conj_rhs,
+        )
+    }
+
+    #[inline(always)]
+    pub unsafe fn execute_f64(
+        mut m: usize,
+        mut n: usize,
+        k: usize,
+        mut dst: *mut f64,
+        mut dst_rs: isize,
+        mut dst_cs: isize,
+        mut lhs: *const f64,
+        mut lhs_rs: isize,
+        mut lhs_cs: isize,
+        mut rhs: *const f64,
+        mut rhs_rs: isize,
+        mut rhs_cs: isize,
+        alpha: f64,
+        beta: f64,
+        mut conj_lhs: bool,
+        mut conj_rhs: bool,
+    ) {
+        if dst_cs.unsigned_abs() < dst_rs.unsigned_abs() {
+            core::mem::swap(&mut m, &mut n);
+            core::mem::swap(&mut dst_rs, &mut dst_cs);
+            core::mem::swap(&mut lhs, &mut rhs);
+            core::mem::swap(&mut lhs_rs, &mut rhs_cs);
+            core::mem::swap(&mut lhs_cs, &mut rhs_rs);
+            core::mem::swap(&mut conj_lhs, &mut conj_rhs);
+        }
+        if dst_rs == -1 && m > 0 {
+            dst = dst.wrapping_offset((m - 1) as isize * dst_rs);
+            dst_rs = dst_rs.wrapping_neg();
+            lhs = lhs.wrapping_offset((m - 1) as isize * lhs_rs);
+            lhs_rs = lhs_rs.wrapping_neg();
+        }
+
+        let plan = if lhs_rs == 1 {
+            Plan::new_colmajor_lhs_and_dst_f64(m, n, k)
+        } else {
+            Plan::new_f64(m, n, k)
+        };
+        plan.execute_unchecked(
+            m, n, k, dst, dst_rs, dst_cs, lhs, lhs_rs, lhs_cs, rhs, rhs_rs, rhs_cs, alpha, beta,
+            conj_lhs, conj_rhs,
+        )
+    }
+
+    #[inline(always)]
+    pub unsafe fn execute_c64(
+        mut m: usize,
+        mut n: usize,
+        k: usize,
+        mut dst: *mut c64,
+        mut dst_rs: isize,
+        mut dst_cs: isize,
+        mut lhs: *const c64,
+        mut lhs_rs: isize,
+        mut lhs_cs: isize,
+        mut rhs: *const c64,
+        mut rhs_rs: isize,
+        mut rhs_cs: isize,
+        alpha: c64,
+        beta: c64,
+        mut conj_lhs: bool,
+        mut conj_rhs: bool,
+    ) {
+        if dst_cs.unsigned_abs() < dst_rs.unsigned_abs() {
+            core::mem::swap(&mut m, &mut n);
+            core::mem::swap(&mut dst_rs, &mut dst_cs);
+            core::mem::swap(&mut lhs, &mut rhs);
+            core::mem::swap(&mut lhs_rs, &mut rhs_cs);
+            core::mem::swap(&mut lhs_cs, &mut rhs_rs);
+            core::mem::swap(&mut conj_lhs, &mut conj_rhs);
+        }
+        if dst_rs == -1 && m > 0 {
+            dst = dst.wrapping_offset((m - 1) as isize * dst_rs);
+            dst_rs = dst_rs.wrapping_neg();
+            lhs = lhs.wrapping_offset((m - 1) as isize * lhs_rs);
+            lhs_rs = lhs_rs.wrapping_neg();
+        }
+
+        let plan = if lhs_rs == 1 {
+            Plan::new_colmajor_lhs_and_dst_c64(m, n, k)
+        } else {
+            Plan::new_c64(m, n, k)
+        };
+        plan.execute_unchecked(
+            m, n, k, dst, dst_rs, dst_cs, lhs, lhs_rs, lhs_cs, rhs, rhs_rs, rhs_cs, alpha, beta,
+            conj_lhs, conj_rhs,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1192,9 +1374,7 @@ mod tests {
         let a: [[f32; 17]; 3] = core::array::from_fn(|_| core::array::from_fn(gen));
         let b: [[f32; 6]; 4] = core::array::from_fn(|_| core::array::from_fn(gen));
         let c: [[f32; 15]; 4] = core::array::from_fn(|_| core::array::from_fn(gen));
-        assert!(std::is_x86_feature_detected!("avx"));
         assert!(std::is_x86_feature_detected!("avx2"));
-        assert!(std::is_x86_feature_detected!("fma"));
         let mut dst = c;
 
         let last_mask: std::arch::x86_64::__m256i = unsafe {
@@ -1254,9 +1434,7 @@ mod tests {
         let a: [[c32; 9]; 3] = core::array::from_fn(|_| core::array::from_fn(gen));
         let b: [[c32; 6]; 2] = core::array::from_fn(|_| core::array::from_fn(gen));
         let c: [[c32; 7]; 2] = core::array::from_fn(|_| core::array::from_fn(gen));
-        assert!(std::is_x86_feature_detected!("avx"));
         assert!(std::is_x86_feature_detected!("avx2"));
-        assert!(std::is_x86_feature_detected!("fma"));
 
         let last_mask: std::arch::x86_64::__m256i = unsafe {
             core::mem::transmute([
@@ -1331,9 +1509,7 @@ mod tests {
         let a: [[c64; 5]; 3] = core::array::from_fn(|_| core::array::from_fn(gen));
         let b: [[c64; 6]; 2] = core::array::from_fn(|_| core::array::from_fn(gen));
         let c: [[c64; 3]; 2] = core::array::from_fn(|_| core::array::from_fn(gen));
-        assert!(std::is_x86_feature_detected!("avx"));
         assert!(std::is_x86_feature_detected!("avx2"));
-        assert!(std::is_x86_feature_detected!("fma"));
 
         let last_mask: std::arch::x86_64::__m256i =
             unsafe { core::mem::transmute([u64::MAX, u64::MAX, 0, 0]) };

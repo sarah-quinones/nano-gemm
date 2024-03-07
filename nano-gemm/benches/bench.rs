@@ -15,8 +15,7 @@ const ALPHA: T = 3.7;
     .chain((MIN..=MAX).map(|size| [4, size, 4]))
     .chain((MIN..=MAX).map(|size| [size, 4, 4]))
 )]
-pub fn nanogemm(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
-
+pub fn nanogemm_plan(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
     let stride = m.next_multiple_of(Ord::min(16, m.next_power_of_two()));
 
     let a = avec![ONE; stride * k];
@@ -53,7 +52,89 @@ pub fn nanogemm(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
     });
 }
 
+#[divan::bench(args = 
+    (MIN..=MAX).map(|size| [size, size, size])
+    .chain((MIN..=MAX).map(|size| [size, size, 4]))
+    .chain((MIN..=MAX).map(|size| [4, size, 4]))
+    .chain((MIN..=MAX).map(|size| [size, 4, 4]))
+)]
+pub fn nanogemm_noplan(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
+    let stride = m.next_multiple_of(Ord::min(16, m.next_power_of_two()));
 
+    let a = avec![ONE; stride * k];
+    let b = avec![ONE; k * n];
+    let c = avec![ONE; stride * n];
+
+    let beta = BETA;
+    let alpha = ALPHA;
+
+    let mut dst = c.clone();
+
+    bencher.bench_local(|| unsafe {
+        for _ in 0..1000 {
+            nano_gemm::planless::execute_f32(
+                m,
+                n,
+                k,
+                dst.as_mut_ptr(),
+                k as isize,
+                core::hint::black_box(1),
+                a.as_ptr(),
+                n as isize,
+                core::hint::black_box(1),
+                b.as_ptr(),
+                n as isize,
+                1,
+                alpha,
+                beta.into(),
+                false,
+                false,
+            );
+        }
+    });
+}
+
+#[divan::bench(args = 
+    (MIN..=MAX).map(|size| [size, size, size])
+    .chain((MIN..=MAX).map(|size| [size, size, 4]))
+    .chain((MIN..=MAX).map(|size| [4, size, 4]))
+    .chain((MIN..=MAX).map(|size| [size, 4, 4]))
+)]
+pub fn nanogemm_noplan_suboptimal(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
+    let stride = m.next_multiple_of(Ord::min(16, m.next_power_of_two()));
+
+    let a = avec![ONE; stride * k];
+    let b = avec![ONE; k * n];
+    let c = avec![ONE; stride * n];
+
+    let beta = BETA;
+    let alpha = ALPHA;
+
+    let mut dst = c.clone();
+
+    bencher.bench_local(|| unsafe {
+        for _ in 0..1000 {
+            nano_gemm::planless::execute_f32(
+                m,
+                n,
+                k,
+                dst.as_mut_ptr(),
+                k as isize,
+                core::hint::black_box(1),
+                a.as_ptr(),
+                n as isize,
+                core::hint::black_box(1),
+                b.as_ptr(),
+                1,
+                k as isize,
+                alpha,
+                beta.into(),
+                false,
+                false,
+            );
+        }
+    });
+}
 
 #[divan::bench(args = 
     (MIN..=MAX).map(|size| [size, size, size])
@@ -67,18 +148,14 @@ pub fn nalgebra(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
     let b = nalgebra::DMatrix::<T>::zeros(k, n);
     let c = nalgebra::DMatrix::<T>::zeros(m, n);
 
-    let beta = BETA;
-
     let mut dst = c.clone();
 
     bencher.bench_local(|| {
         for _ in 0..1000 {
-            dst +=  &a * &b * beta;
+            a.mul_to(&b, &mut dst);
         }
     });
 }
-
-
 
 #[divan::bench(args = 
     (MIN..=MAX).map(|size| [size, size, size])
