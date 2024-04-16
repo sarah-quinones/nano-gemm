@@ -14,14 +14,15 @@ nano-gemm-c64 = { version = "0.1.0", default-features = false, path = "../nano-g
 
 [dev-dependencies]
 aligned-vec = "0.5.0"
-divan = "0.1.14"
 itertools = "0.12.1"
 nalgebra = "0.32.4"
 intel-mkl-src = { version = "*" }
 ndarray = { version = "*", features = ["blas"] }
 rand = "0.8.5"
-faer = "0.17"
+faer = { version = "0.17", features = ["nightly"] }
 num-complex = { version = "0.4.5", features = ["rand"] }
+diol = "0.2.0"
+clap = { version = "4.5.4", features = ["derive"] }
 
 [build-dependencies]
 nano-gemm-codegen = { version = "0.1", path = "../nano-gemm-codegen" }

@@ -1,7 +1,8 @@
 use aligned_vec::avec;
+use diol::prelude::*;
 
 const MIN: usize = 1;
-const MAX: usize = 64;
+const MAX: usize = 128;
 
 type T = f32;
 type FaerT = f32;
@@ -9,13 +10,16 @@ const ONE: T = 1.0;
 const BETA: T = 2.5;
 const ALPHA: T = 3.7;
 
-#[divan::bench(args = 
-    (MIN..=MAX).map(|size| [size, size, size])
-    .chain((MIN..=MAX).map(|size| [size, size, 4]))
-    .chain((MIN..=MAX).map(|size| [4, size, 4]))
-    .chain((MIN..=MAX).map(|size| [size, 4, 4]))
-)]
-pub fn nanogemm_plan(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
+fn args() -> Vec<[usize; 3]> {
+    (MIN..=MAX)
+        .map(|size| [size, size, size])
+        .chain((MIN..=MAX).map(|size| [size, size, 4]))
+        .chain((MIN..=MAX).map(|size| [4, size, 4]))
+        .chain((MIN..=MAX).map(|size| [size, 4, 4]))
+        .collect()
+}
+
+pub fn nanogemm_plan(bencher: Bencher, [m, n, k]: [usize; 3]) {
     let stride = m.next_multiple_of(Ord::min(16, m.next_power_of_two()));
 
     let a = avec![ONE; stride * k];
@@ -28,8 +32,8 @@ pub fn nanogemm_plan(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
     let plan = nano_gemm::Plan::new_colmajor_lhs_and_dst_f32(m, n, k);
     let mut dst = c.clone();
 
-    bencher.bench_local(|| unsafe {
-        for _ in 0..1000 {
+    bencher.bench(|| unsafe {
+        {
             plan.execute_unchecked(
                 m,
                 n,
@@ -52,13 +56,7 @@ pub fn nanogemm_plan(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
     });
 }
 
-#[divan::bench(args = 
-    (MIN..=MAX).map(|size| [size, size, size])
-    .chain((MIN..=MAX).map(|size| [size, size, 4]))
-    .chain((MIN..=MAX).map(|size| [4, size, 4]))
-    .chain((MIN..=MAX).map(|size| [size, 4, 4]))
-)]
-pub fn nanogemm_noplan(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
+pub fn nanogemm_noplan(bencher: Bencher, [m, n, k]: [usize; 3]) {
     let stride = m.next_multiple_of(Ord::min(16, m.next_power_of_two()));
 
     let a = avec![ONE; stride * k];
@@ -70,21 +68,21 @@ pub fn nanogemm_noplan(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
 
     let mut dst = c.clone();
 
-    bencher.bench_local(|| unsafe {
-        for _ in 0..1000 {
+    bencher.bench(|| unsafe {
+        {
             nano_gemm::planless::execute_f32(
                 m,
                 n,
                 k,
                 dst.as_mut_ptr(),
-                n as isize,
-                core::hint::black_box(1),
-                a.as_ptr(),
-                k as isize,
-                core::hint::black_box(1),
-                b.as_ptr(),
-                n as isize,
                 1,
+                stride as isize,
+                a.as_ptr(),
+                1,
+                stride as isize,
+                b.as_ptr(),
+                1,
+                k as isize,
                 alpha,
                 beta.into(),
                 false,
@@ -94,13 +92,7 @@ pub fn nanogemm_noplan(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
     });
 }
 
-#[divan::bench(args = 
-    (MIN..=MAX).map(|size| [size, size, size])
-    .chain((MIN..=MAX).map(|size| [size, size, 4]))
-    .chain((MIN..=MAX).map(|size| [4, size, 4]))
-    .chain((MIN..=MAX).map(|size| [size, 4, 4]))
-)]
-pub fn nanogemm_noplan_suboptimal(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
+pub fn nanogemm_noplan_suboptimal(bencher: Bencher, [m, n, k]: [usize; 3]) {
     let stride = m.next_multiple_of(Ord::min(16, m.next_power_of_two()));
 
     let a = avec![ONE; stride * k];
@@ -112,8 +104,8 @@ pub fn nanogemm_noplan_suboptimal(bencher: divan::Bencher, [ m, n, k]: [usize; 3
 
     let mut dst = c.clone();
 
-    bencher.bench_local(|| unsafe {
-        for _ in 0..1000 {
+    bencher.bench(|| unsafe {
+        {
             nano_gemm::planless::execute_f32(
                 m,
                 n,
@@ -136,35 +128,19 @@ pub fn nanogemm_noplan_suboptimal(bencher: divan::Bencher, [ m, n, k]: [usize; 3
     });
 }
 
-#[divan::bench(args = 
-    (MIN..=MAX).map(|size| [size, size, size])
-    .chain((MIN..=MAX).map(|size| [size, size, 4]))
-    .chain((MIN..=MAX).map(|size| [4, size, 4]))
-    .chain((MIN..=MAX).map(|size| [size, 4, 4]))
-)]
-pub fn nalgebra(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
-
+pub fn nalgebra(bencher: Bencher, [m, n, k]: [usize; 3]) {
     let a = nalgebra::DMatrix::<T>::zeros(m, k);
     let b = nalgebra::DMatrix::<T>::zeros(k, n);
     let c = nalgebra::DMatrix::<T>::zeros(m, n);
 
     let mut dst = c.clone();
 
-    bencher.bench_local(|| {
-        for _ in 0..1000 {
-            a.mul_to(&b, &mut dst);
-        }
+    bencher.bench(|| {
+        a.mul_to(&b, &mut dst);
     });
 }
 
-#[divan::bench(args = 
-    (MIN..=MAX).map(|size| [size, size, size])
-    .chain((MIN..=MAX).map(|size| [size, size, 4]))
-    .chain((MIN..=MAX).map(|size| [4, size, 4]))
-    .chain((MIN..=MAX).map(|size| [size, 4, 4]))
-)]
-pub fn faer(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
-
+pub fn faer(bencher: Bencher, [m, n, k]: [usize; 3]) {
     let a = faer::Mat::<FaerT>::zeros(m, k);
     let b = faer::Mat::<FaerT>::zeros(k, n);
     let c = faer::Mat::<FaerT>::zeros(m, n);
@@ -173,15 +149,15 @@ pub fn faer(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
 
     let mut dst = c.clone();
 
-    bencher.bench_local(|| {
-        for _ in 0..1000 {
+    bencher.bench(|| {
+        {
             faer::modules::core::mul::matmul(
                 dst.as_mut(),
                 a.as_ref(),
                 b.as_ref(),
                 Some(1.0.into()),
                 beta,
-                faer::Parallelism::None,
+                faer::Parallelism::Rayon(0),
             )
         }
     });
@@ -191,14 +167,7 @@ pub fn faer(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
 extern crate intel_mkl_src;
 
 #[cfg(target_arch = "x86_64")]
-#[divan::bench(args = 
-    (MIN..=MAX).map(|size| [size, size, size])
-    .chain((MIN..=MAX).map(|size| [size, size, 4]))
-    .chain((MIN..=MAX).map(|size| [4, size, 4]))
-    .chain((MIN..=MAX).map(|size| [size, 4, 4]))
-)]
-pub fn ndarray(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
-
+pub fn ndarray(bencher: Bencher, [m, n, k]: [usize; 3]) {
     let mut a = ndarray::Array2::zeros([m, k]);
     let mut b = ndarray::Array2::zeros([k, n]);
     let mut c = ndarray::Array2::zeros([m, n]);
@@ -212,13 +181,57 @@ pub fn ndarray(bencher: divan::Bencher, [ m, n, k]: [usize; 3]) {
     }
 
     let dst = c.clone();
-    bencher.bench_local(|| {
-        for _ in 0..1000 {
-             _ = &dst + beta * a.dot(&b);
-        }
+    bencher.bench(|| {
+        _ = &dst + beta * a.dot(&b);
     });
 }
 
 pub fn main() {
-    divan::main();
+    let mut config = BenchConfig::default();
+
+    use clap::Parser;
+    #[derive(Parser, Debug)]
+    struct Args {
+        #[arg(long)]
+        bench: bool,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        arg: Option<String>,
+    }
+    let cmdline_args = Args::parse();
+    if let Some(name) = &cmdline_args.name {
+        config.fn_regex = Some(Regex::new(name).unwrap());
+    }
+    if let Some(arg) = &cmdline_args.arg {
+        config.arg_regex = Some(Regex::new(arg).unwrap());
+    }
+
+    let mut bench = Bench::new(config);
+
+    #[cfg(target_arch = "x86_64")]
+    bench.register_many(
+        list![
+            nanogemm_plan,
+            nanogemm_noplan,
+            nanogemm_noplan_suboptimal,
+            nalgebra,
+            faer,
+            ndarray,
+        ],
+        args(),
+    );
+    #[cfg(not(target_arch = "x86_64"))]
+    bench.register_many(
+        list![
+            nanogemm_plan,
+            nanogemm_noplan,
+            nanogemm_noplan_suboptimal,
+            nalgebra,
+            faer,
+        ],
+        args(),
+    );
+
+    bench.run();
 }
