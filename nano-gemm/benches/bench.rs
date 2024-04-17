@@ -206,6 +206,7 @@ pub fn main() {
     if let Some(arg) = &cmdline_args.arg {
         config.arg_regex = Some(Regex::new(arg).unwrap());
     }
+    config.split = Split::ByArg;
 
     let mut bench = Bench::new(config);
 
