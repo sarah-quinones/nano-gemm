@@ -2,6 +2,12 @@
 name = "nano-gemm-c64"
 version = "0.1.0"
 edition = "2021"
+authors = ["sarah <>"]
+description = "Small matrix multiplicatio"
+readme = "../README.md"
+repository = "https://github.com/sarah-ek/nano-gemm/"
+license = "MIT"
+keywords = ["math", "matrix"]
 
 [dependencies]
 nano-gemm-core = { version = "0.1", path = "../nano-gemm-core" }
