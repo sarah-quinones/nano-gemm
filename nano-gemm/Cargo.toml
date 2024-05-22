@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-equator = "0.1.10"
+equator = "0.2.1"
 num-complex = { version = "0.4.5", default-features = false }
 nano-gemm-core = { version = "0.1.0", path = "../nano-gemm-core" }
 nano-gemm-f32 = { version = "0.1.0", default-features = false, path = "../nano-gemm-f32" }
