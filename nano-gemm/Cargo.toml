@@ -2,6 +2,11 @@
 name = "nano-gemm"
 version = "0.1.0"
 edition = "2021"
+description = "Small matrix multiplication"
+readme = "../README.md"
+repository = "https://github.com/sarah-ek/nano-gemm/"
+license = "MIT"
+keywords = ["math", "matrix"]
 
 [dependencies]
 equator = "0.2.1"
