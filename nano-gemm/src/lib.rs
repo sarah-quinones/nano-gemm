@@ -1,3 +1,4 @@
+#![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(
     all(any(target_arch = "x86_64", target_arch = "x86"), feature = "nightly"),
     feature(stdarch_x86_avx512, avx512_target_feature)
@@ -844,6 +845,7 @@ impl<T> Plan<T> {
 impl Plan<f32> {
     #[track_caller]
     pub fn new_f32_impl(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+        #[cfg(feature = "std")]
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             #[cfg(feature = "nightly")]
@@ -865,6 +867,7 @@ impl Plan<f32> {
                 return Self::new_f32_avx(m, n, k, is_col_major);
             }
         }
+        #[cfg(feature = "std")]
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
@@ -895,6 +898,7 @@ impl Plan<f32> {
 impl Plan<f64> {
     #[track_caller]
     pub fn new_f64_impl(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+        #[cfg(feature = "std")]
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             #[cfg(feature = "nightly")]
@@ -914,6 +918,7 @@ impl Plan<f64> {
             }
         }
 
+        #[cfg(feature = "std")]
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
@@ -944,6 +949,7 @@ impl Plan<f64> {
 impl Plan<c32> {
     #[track_caller]
     pub fn new_c32_impl(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+        #[cfg(feature = "std")]
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             #[cfg(feature = "nightly")]
@@ -963,6 +969,7 @@ impl Plan<c32> {
             }
         }
 
+        #[cfg(feature = "std")]
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon")
@@ -995,6 +1002,7 @@ impl Plan<c32> {
 impl Plan<c64> {
     #[track_caller]
     pub fn new_c64_impl(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
+        #[cfg(feature = "std")]
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             #[cfg(feature = "nightly")]
@@ -1010,6 +1018,7 @@ impl Plan<c64> {
             }
         }
 
+        #[cfg(feature = "std")]
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon")
