@@ -483,7 +483,10 @@ unsafe fn copy_millikernel<
                 while j < n {
                     let j_bs = Ord::min(N_BS, n - j);
 
+                    let rhs = rhs.offset(rhs_rs * depth as isize + rhs_cs * j as isize);
+
                     let dst = dst.offset(dst_rs * i as isize + dst_cs * j as isize);
+                    let gemm_dst = gemm_dst.offset(i as isize + gemm_dst_cs * j as isize);
 
                     direct_millikernel(
                         microkernels,
@@ -1224,7 +1227,7 @@ pub mod planless {
             lhs_rs = lhs_rs.wrapping_neg();
         }
 
-        let plan = if lhs_rs == 1 {
+        let plan = if lhs_rs == 1 && dst_rs == 1 {
             Plan::new_colmajor_lhs_and_dst_f32(m, n, k)
         } else {
             Plan::new_f32(m, n, k)
@@ -1269,7 +1272,7 @@ pub mod planless {
             lhs_rs = lhs_rs.wrapping_neg();
         }
 
-        let plan = if lhs_rs == 1 {
+        let plan = if lhs_rs == 1 && dst_rs == 1 {
             Plan::new_colmajor_lhs_and_dst_c32(m, n, k)
         } else {
             Plan::new_c32(m, n, k)
@@ -1314,7 +1317,7 @@ pub mod planless {
             lhs_rs = lhs_rs.wrapping_neg();
         }
 
-        let plan = if lhs_rs == 1 {
+        let plan = if lhs_rs == 1 && dst_rs == 1 {
             Plan::new_colmajor_lhs_and_dst_f64(m, n, k)
         } else {
             Plan::new_f64(m, n, k)
@@ -1359,7 +1362,7 @@ pub mod planless {
             lhs_rs = lhs_rs.wrapping_neg();
         }
 
-        let plan = if lhs_rs == 1 {
+        let plan = if lhs_rs == 1 && dst_rs == 1 {
             Plan::new_colmajor_lhs_and_dst_c64(m, n, k)
         } else {
             Plan::new_c64(m, n, k)
@@ -1628,7 +1631,7 @@ mod tests {
     #[test]
     fn test_plan_cplx() {
         let gen = |_| rand::random::<c64>();
-        for ((m, n), k) in (0..32).zip(0..32).zip([1, 4, 17]) {
+        for ((m, n), k) in (0..128).zip(0..128).zip([1, 4, 17]) {
             let a = (0..m * k).into_iter().map(gen).collect::<Vec<_>>();
             let b = (0..k * n).into_iter().map(gen).collect::<Vec<_>>();
             let c = (0..m * n).into_iter().map(gen).collect::<Vec<_>>();
@@ -1693,10 +1696,13 @@ mod tests {
     #[test]
     fn test_plan_strided() {
         let gen = |_| rand::random::<f32>();
-        for ((m, n), k) in (0..32).zip(0..32).zip([1, 4, 17]) {
-            let a = (0..2 * 33 * k).into_iter().map(gen).collect::<Vec<_>>();
+        for ((m, n), k) in (0..128).zip(0..128).zip([1, 4, 17]) {
+            let a = (0..2 * 200 * k).into_iter().map(gen).collect::<Vec<_>>();
             let b = (0..k * n).into_iter().map(gen).collect::<Vec<_>>();
-            let c = (0..3 * 44 * n).into_iter().map(|_| 0.0).collect::<Vec<_>>();
+            let c = (0..3 * 400 * n)
+                .into_iter()
+                .map(|_| 0.0)
+                .collect::<Vec<_>>();
             let mut dst = c.clone();
 
             let plan = Plan::new_f32(m, n, k);
@@ -1709,10 +1715,10 @@ mod tests {
                     k,
                     dst.as_mut_ptr(),
                     3,
-                    44,
+                    400,
                     a.as_ptr(),
                     2,
-                    33,
+                    200,
                     b.as_ptr(),
                     1,
                     k as isize,
@@ -1728,14 +1734,123 @@ mod tests {
                 for j in 0..n {
                     let mut acc = 0.0f32;
                     for depth in 0..k {
-                        acc = f32::mul_add(a[depth * 33 + i * 2], b[j * k + depth], acc);
+                        acc = f32::mul_add(a[depth * 200 + i * 2], b[j * k + depth], acc);
                     }
-                    expected_dst[j * 44 + i * 3] =
-                        f32::mul_add(beta, acc, expected_dst[j * 44 + i * 3]);
+                    expected_dst[j * 400 + i * 3] =
+                        f32::mul_add(beta, acc, expected_dst[j * 400 + i * 3]);
                 }
             }
 
             for (dst, expected_dst) in dst.iter().zip(&expected_dst) {
+                assert!((dst - expected_dst).abs() < 1e-4);
+            }
+        }
+    }
+
+    #[test]
+    fn test_plan_cplx_strided() {
+        let gen = |_| c64::new(rand::random(), rand::random());
+        for ((m, n), k) in (0..128).zip(0..128).zip([1, 4, 17, 190]) {
+            let a = (0..2 * 200 * k).into_iter().map(gen).collect::<Vec<_>>();
+            let b = (0..k * n).into_iter().map(gen).collect::<Vec<_>>();
+            let c = (0..3 * 400 * n)
+                .into_iter()
+                .map(|_| c64::ZERO)
+                .collect::<Vec<_>>();
+            let mut dst = c.clone();
+
+            let beta = 2.5.into();
+
+            unsafe {
+                planless::execute_c64(
+                    m,
+                    n,
+                    k,
+                    dst.as_mut_ptr(),
+                    3,
+                    400,
+                    a.as_ptr(),
+                    2,
+                    200,
+                    b.as_ptr(),
+                    1,
+                    k as isize,
+                    1.0.into(),
+                    beta,
+                    false,
+                    false,
+                );
+            };
+
+            let mut expected_dst = c;
+            for i in 0..m {
+                for j in 0..n {
+                    let mut acc = c64::ZERO;
+                    for depth in 0..k {
+                        acc += a[depth * 200 + i * 2] * b[j * k + depth];
+                    }
+                    expected_dst[j * 400 + i * 3] = beta * acc + expected_dst[j * 400 + i * 3];
+                }
+            }
+
+            for (dst, expected_dst) in dst.iter().zip(&expected_dst) {
+                use num_complex::ComplexFloat;
+                assert!((dst - expected_dst).abs() < 1e-4);
+            }
+        }
+    }
+
+    #[test]
+    fn test_plan_cplx_strided2() {
+        let gen = |_| c64::new(rand::random(), rand::random());
+        let m = 102;
+        let n = 2;
+        let k = 190;
+        {
+            let a = (0..2 * 200 * k).into_iter().map(gen).collect::<Vec<_>>();
+            let b = (0..k * n).into_iter().map(gen).collect::<Vec<_>>();
+            let c = (0..400 * n)
+                .into_iter()
+                .map(|_| c64::ZERO)
+                .collect::<Vec<_>>();
+            let mut dst = c.clone();
+
+            let beta = 2.5.into();
+
+            unsafe {
+                planless::execute_c64(
+                    m,
+                    n,
+                    k,
+                    dst.as_mut_ptr(),
+                    1,
+                    400,
+                    a.as_ptr(),
+                    2,
+                    200,
+                    b.as_ptr(),
+                    1,
+                    k as isize,
+                    1.0.into(),
+                    beta,
+                    false,
+                    false,
+                );
+            };
+
+            let mut expected_dst = c;
+            for i in 0..m {
+                for j in 0..n {
+                    let mut acc = c64::ZERO;
+                    for depth in 0..k {
+                        acc += a[depth * 200 + i * 2] * b[j * k + depth];
+                    }
+                    expected_dst[j * 400 + i] = beta * acc + expected_dst[j * 400 + i];
+                }
+            }
+
+            for (dst, expected_dst) in dst.iter().zip(&expected_dst) {
+                use num_complex::ComplexFloat;
                 assert!((dst - expected_dst).abs() < 1e-4);
             }
         }
