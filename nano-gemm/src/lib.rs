@@ -29,7 +29,7 @@ pub type c64 = num_complex::Complex64;
 
 pub use nano_gemm_core::*;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Copy, Clone)]
 pub struct Plan<T> {
     microkernels: [[MaybeUninit<MicroKernel<T>>; 2]; 2],
     millikernel: unsafe fn(

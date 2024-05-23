@@ -397,7 +397,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "469bc7996e14467f69e462b5eed8ce3927e816d6375e90779fe578a531bb5b7f"
 dependencies = [
  "dyn-clone",
- "equator 0.2.1",
+ "equator 0.2.2",
  "plotters",
  "regex",
  "serde",
@@ -511,9 +511,9 @@ dependencies = [
 
 [[package]]
 name = "equator"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de77c476ef49f472aee1f31473271bffa3bf3680a9ac8bb44e87a3a3f752661b"
+checksum = "c35da53b5a021d2484a7cc49b2ac7f2d840f8236a286f84202369bd338d761ea"
 dependencies = [
  "equator-macro 0.2.1",
 ]
@@ -1203,12 +1203,12 @@ dependencies = [
 
 [[package]]
 name = "nano-gemm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aligned-vec",
  "clap",
  "diol",
- "equator 0.2.1",
+ "equator 0.2.2",
  "faer",
  "intel-mkl-src",
  "itertools",
