@@ -486,7 +486,11 @@ unsafe fn copy_millikernel<
                     let rhs = rhs.offset(rhs_rs * depth as isize + rhs_cs * j as isize);
 
                     let dst = dst.offset(dst_rs * i as isize + dst_cs * j as isize);
-                    let gemm_dst = gemm_dst.offset(i as isize + gemm_dst_cs * j as isize);
+                    let gemm_dst = if dst_rs == 1 {
+                        gemm_dst.offset(i as isize + gemm_dst_cs * j as isize)
+                    } else {
+                        gemm_dst
+                    };
 
                     direct_millikernel(
                         microkernels,
