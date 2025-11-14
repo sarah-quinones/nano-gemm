@@ -35,11 +35,11 @@ nano-gemm-codegen = { version = "0.1", path = "../nano-gemm-codegen" }
 [features]
 default = ["std"]
 std = []
-nightly = [
-  "nano-gemm-f32/nightly",
-  "nano-gemm-f64/nightly",
-  "nano-gemm-c32/nightly",
-  "nano-gemm-c64/nightly",
+x86-v4 = [
+  "nano-gemm-f32/x86-v4",
+  "nano-gemm-f64/x86-v4",
+  "nano-gemm-c32/x86-v4",
+  "nano-gemm-c64/x86-v4",
 ]
 
 [[bench]]

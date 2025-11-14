@@ -18,4 +18,4 @@ nano-gemm-codegen = { version = "0.1", path = "../nano-gemm-codegen" }
 
 [features]
 default = []
-nightly = []
+x86-v4 = []

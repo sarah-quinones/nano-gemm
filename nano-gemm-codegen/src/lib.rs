@@ -1799,7 +1799,7 @@ pub mod x86 {
         }
         write!(code, "}}\n")?;
 
-        write!(code, "#[cfg(feature = \"nightly\")] pub mod avx512 {{\n")?;
+        write!(code, "#[cfg(feature = \"x86-v4\")] pub mod avx512 {{\n")?;
         {
             write!(
                 code,
@@ -2081,7 +2081,7 @@ pub mod x86 {
         write!(
             code,
             "
-        #[cfg(feature = \"nightly\")]
+        #[cfg(feature = \"x86-v4\")]
         pub mod avx512 {{\n"
         )?;
         {
@@ -2388,7 +2388,7 @@ pub mod x86 {
         write!(
             code,
             "
-        #[cfg(feature = \"nightly\")]
+        #[cfg(feature = \"x86-v4\")]
         pub mod avx512 {{\n"
         )?;
 
@@ -2636,7 +2636,7 @@ pub mod x86 {
         write!(
             code,
             "
-        #[cfg(feature = \"nightly\")]
+        #[cfg(feature = \"x86-v4\")]
         pub mod avx512 {{\n"
         )?;
 

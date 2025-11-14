@@ -19,7 +19,7 @@ use core::arch::x86::*;
 
 #[target_feature(enable = "avx512f")]
 #[inline]
-#[cfg(all(any(target_arch = "x86_64", target_arch = "x86"), feature = "nightly"))]
+#[cfg(all(any(target_arch = "x86_64", target_arch = "x86"), feature = "x86-v4"))]
 unsafe fn subadd_pd(a: __m512d, b: __m512d, c: __m512d) -> __m512d {
     _mm512_fmaddsub_pd(
         a,

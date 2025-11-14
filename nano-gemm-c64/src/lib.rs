@@ -1,5 +1,5 @@
 #![cfg_attr(
-    all(any(target_arch = "x86_64", target_arch = "x86"), feature = "nightly"),
+    all(any(target_arch = "x86_64", target_arch = "x86"), feature = "x86-v4"),
     feature(stdarch_x86_avx512, avx512_target_feature)
 )]
 #![no_std]

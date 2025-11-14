@@ -1,6 +1,6 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(
-    all(any(target_arch = "x86_64", target_arch = "x86"), feature = "nightly"),
+    all(any(target_arch = "x86_64", target_arch = "x86"), feature = "x86-v4"),
     feature(stdarch_x86_avx512, avx512_target_feature)
 )]
 
@@ -855,7 +855,7 @@ impl Plan<f32> {
         #[cfg(feature = "std")]
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            #[cfg(feature = "nightly")]
+            #[cfg(feature = "x86-v4")]
             if m > 8 && std::is_x86_feature_detected!("avx512f") {
                 return Self::new_f32_avx512(m, n, k, is_col_major);
             }
@@ -908,7 +908,7 @@ impl Plan<f64> {
         #[cfg(feature = "std")]
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            #[cfg(feature = "nightly")]
+            #[cfg(feature = "x86-v4")]
             if m > 4 && std::is_x86_feature_detected!("avx512f") {
                 return Self::new_f64_avx512(m, n, k, is_col_major);
             }
@@ -959,7 +959,7 @@ impl Plan<c32> {
         #[cfg(feature = "std")]
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            #[cfg(feature = "nightly")]
+            #[cfg(feature = "x86-v4")]
             if m > 4 && std::is_x86_feature_detected!("avx512f") {
                 return Self::new_c32_avx512(m, n, k, is_col_major);
             }
@@ -1012,7 +1012,7 @@ impl Plan<c64> {
         #[cfg(feature = "std")]
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            #[cfg(feature = "nightly")]
+            #[cfg(feature = "x86-v4")]
             if m > 2 && std::is_x86_feature_detected!("avx512f") {
                 return Self::new_c64_avx512(m, n, k, is_col_major);
             }
@@ -1091,7 +1091,7 @@ mod x86_api {
             Self::from_masked_impl(&MICROKERNELS, Some(&MASKS), m, n, k, is_col_major)
         }
 
-        #[cfg(feature = "nightly")]
+        #[cfg(feature = "x86-v4")]
         pub fn new_f32_avx512(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
             use x86::f32::avx512::*;
             Self::from_masked_impl(&MICROKERNELS, Some(&MASKS), m, n, k, is_col_major)
@@ -1127,7 +1127,7 @@ mod x86_api {
             Self::from_masked_impl(&MICROKERNELS, Some(&MASKS), m, n, k, is_col_major)
         }
 
-        #[cfg(feature = "nightly")]
+        #[cfg(feature = "x86-v4")]
         pub fn new_f64_avx512(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
             use x86::f64::avx512::*;
             Self::from_masked_impl(&MICROKERNELS, Some(&MASKS), m, n, k, is_col_major)
@@ -1162,7 +1162,7 @@ mod x86_api {
             Self::from_masked_impl(&MICROKERNELS, Some(&MASKS), m, n, k, is_col_major)
         }
 
-        #[cfg(feature = "nightly")]
+        #[cfg(feature = "x86-v4")]
         pub fn new_c32_avx512(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
             use x86::c32::avx512::*;
             Self::from_masked_impl(&MICROKERNELS, Some(&MASKS), m, n, k, is_col_major)
@@ -1186,7 +1186,7 @@ mod x86_api {
             Self::from_masked_impl(&MICROKERNELS, Some(&MASKS), m, n, k, is_col_major)
         }
 
-        #[cfg(feature = "nightly")]
+        #[cfg(feature = "x86-v4")]
         pub fn new_c64_avx512(m: usize, n: usize, k: usize, is_col_major: bool) -> Self {
             use x86::c64::avx512::*;
             Self::from_masked_impl(&MICROKERNELS, Some(&MASKS), m, n, k, is_col_major)
