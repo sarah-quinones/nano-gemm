@@ -1,6 +1,6 @@
 [package]
 name = "nano-gemm-c32"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["sarah <>"]
 description = "Small matrix multiplication"
@@ -10,11 +10,11 @@ license = "MIT"
 keywords = ["math", "matrix"]
 
 [dependencies]
-nano-gemm-core = { version = "0.1", path = "../nano-gemm-core" }
+nano-gemm-core = { version = "0.2", path = "../nano-gemm-core" }
 num-complex = { version = "0.4.5", default-features = false }
 
 [build-dependencies]
-nano-gemm-codegen = { version = "0.1", path = "../nano-gemm-codegen" }
+nano-gemm-codegen = { version = "0.2", path = "../nano-gemm-codegen" }
 
 [features]
 default = []
