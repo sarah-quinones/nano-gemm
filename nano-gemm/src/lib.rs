@@ -1,8 +1,4 @@
 #![cfg_attr(not(feature = "std"), no_std)]
-#![cfg_attr(
-    all(any(target_arch = "x86_64", target_arch = "x86"), feature = "x86-v4"),
-    feature(stdarch_x86_avx512, avx512_target_feature)
-)]
 
 use core::mem::MaybeUninit;
 use equator::debug_assert;
