@@ -1193,7 +1193,7 @@ dependencies = [
 
 [[package]]
 name = "nano-gemm"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aligned-vec",
  "clap",
@@ -1216,7 +1216,7 @@ dependencies = [
 
 [[package]]
 name = "nano-gemm-c32"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "nano-gemm-codegen",
  "nano-gemm-core",
@@ -1225,7 +1225,7 @@ dependencies = [
 
 [[package]]
 name = "nano-gemm-c64"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "nano-gemm-codegen",
  "nano-gemm-core",
@@ -1234,15 +1234,15 @@ dependencies = [
 
 [[package]]
 name = "nano-gemm-codegen"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "nano-gemm-core"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "nano-gemm-f32"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "nano-gemm-codegen",
  "nano-gemm-core",
@@ -1250,7 +1250,7 @@ dependencies = [
 
 [[package]]
 name = "nano-gemm-f64"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "nano-gemm-codegen",
  "nano-gemm-core",
